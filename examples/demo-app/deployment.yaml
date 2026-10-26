@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autoscale-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-custom
+  namespace: autoscale-demo
+  labels:
+    app: demo-custom
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: demo-custom
+  template:
+    metadata:
+      labels:
+        app: demo-custom
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: demo-custom
+          image: kubescale-demo:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DEMO_NAMESPACE
+              value: autoscale-demo
+            - name: DEMO_APP
+              value: demo-custom
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-custom
+  namespace: autoscale-demo
+  labels:
+    app: demo-custom
+spec:
+  selector:
+    app: demo-custom
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

@@ -1,0 +1,30 @@
+# Dependencies, package caches and build output
+node_modules/
+.pnpm-store/
+dist/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+
+# Local settings and credentials (keep distributable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Runtime databases, logs and generated acceptance output
+*.db
+*.db-shm
+*.db-wal
+*.log
+/tests/results/
+/backend/kubescale
+/backend/demo-app
+*.exe
+
+# Editor / OS temporary files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

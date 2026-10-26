@@ -1,0 +1,18 @@
+# Requires the ServiceMonitor CRD. Adjust the release label to match your Prometheus installation.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubescale-demo
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames: [autoscale-demo]
+  selector:
+    matchLabels:
+      app: demo-custom
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
