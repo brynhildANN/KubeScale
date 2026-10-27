@@ -33,19 +33,35 @@ assert(namespace.startsWith('kubescale-test-'), 'use a disposable kubescale-test
   }
   try {
     await fs.mkdir(output, { recursive: true })
-    assert.equal((await request('/policies')).total, 0, 'test backend must have no existing policies')
+    assert.equal(
+      (await request('/policies')).total,
+      0,
+      'test backend must have no existing policies',
+    )
     originalReplicas = (await request(`/workloads/${namespace}/${workload}`)).desiredReplicas
     await page.goto(`${base}/policies`)
     await page.getByRole('heading', { name: '伸缩策略', exact: true }).waitFor()
     await page.getByText('每 30 秒自动刷新 · 支持手动刷新').waitFor()
     await page.getByRole('button', { name: '创建策略' }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.locator('.el-form-item').filter({ hasText: 'Namespace' }).locator('.el-select').click()
+    await dialog
+      .locator('.el-form-item')
+      .filter({ hasText: 'Namespace' })
+      .locator('.el-select')
+      .click()
     await page.getByRole('option', { name: namespace, exact: true }).click()
-    await dialog.locator('.el-form-item').filter({ hasText: 'Deployment' }).locator('.el-select').click()
+    await dialog
+      .locator('.el-form-item')
+      .filter({ hasText: 'Deployment' })
+      .locator('.el-select')
+      .click()
     await page.getByRole('option', { name: new RegExp(`^${workload} ·`) }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
-    await dialog.locator('.el-form-item').filter({ hasText: '策略名称' }).locator('input').fill(name)
+    await dialog
+      .locator('.el-form-item')
+      .filter({ hasText: '策略名称' })
+      .locator('input')
+      .fill(name)
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '保存策略' }).click()
@@ -59,7 +75,7 @@ assert(namespace.startsWith('kubescale-test-'), 'use a disposable kubescale-test
     await (await row()).getByRole('button', { name: '编辑', exact: true }).click()
     await dialog.locator('.el-form-item').filter({ hasText: 'Namespace' }).waitFor()
     const current = await request(`/policies/${id}`)
-    await request(`/policies/${id}`, { method: 'PUT', data: { ...current, targetValue: .6 } })
+    await request(`/policies/${id}`, { method: 'PUT', data: { ...current, targetValue: 0.6 } })
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
@@ -69,13 +85,16 @@ assert(namespace.startsWith('kubescale-test-'), 'use a disposable kubescale-test
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await (await row()).getByRole('button', { name: '编辑', exact: true }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
-    const input = dialog.locator('.el-form-item').filter({ hasText: '目标 CPU 利用率' }).locator('input')
+    const input = dialog
+      .locator('.el-form-item')
+      .filter({ hasText: '目标 CPU 利用率' })
+      .locator('input')
     await input.fill('0.65')
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '下一步' }).click()
     await dialog.getByRole('button', { name: '保存策略' }).click()
     await dialog.waitFor({ state: 'hidden' })
-    assert.equal((await request(`/policies/${id}`)).targetValue, .65)
+    assert.equal((await request(`/policies/${id}`)).targetValue, 0.65)
     await page.goto(`${base}/workloads/${namespace}/${workload}`)
     await page.getByRole('tab', { name: '自动伸缩', exact: true }).click()
     await page.getByRole('button', { name: '查看决策详情' }).first().click({ timeout: 120000 })
@@ -98,35 +117,71 @@ assert(namespace.startsWith('kubescale-test-'), 'use a disposable kubescale-test
     assert(!(await request('/policies')).items.some((p) => p.id === id))
     id = null
     assert.deepEqual(errors, [])
-    await fs.writeFile(`${output}/console.json`, JSON.stringify({ passed: true, checks: ['create', 'enable', 'version conflict', 'edit', 'decision snapshot', 'charts', 'pause', 'resume', 'delete', 'no browser errors'] }, null, 2))
+    await fs.writeFile(
+      `${output}/console.json`,
+      JSON.stringify(
+        {
+          passed: true,
+          checks: [
+            'create',
+            'enable',
+            'version conflict',
+            'edit',
+            'decision snapshot',
+            'charts',
+            'pause',
+            'resume',
+            'delete',
+            'no browser errors',
+          ],
+        },
+        null,
+        2,
+      ),
+    )
     console.log('PASS: real console lifecycle, conflict feedback, decision detail and charts')
   } catch (error) {
     await fs.mkdir(output, { recursive: true })
-    await fs.writeFile(`${output}/console.json`, JSON.stringify({ passed: false, error: error.message }, null, 2))
+    await fs.writeFile(
+      `${output}/console.json`,
+      JSON.stringify({ passed: false, error: error.message }, null, 2),
+    )
     throw error
   } finally {
     try {
       // 保存请求已成功但页面后续步骤失败时，也按唯一名称找回本次策略。
       if (!id) {
-        const list = await request(`/policies?namespace=${encodeURIComponent(namespace)}&pageSize=100`)
+        const list = await request(
+          `/policies?namespace=${encodeURIComponent(namespace)}&pageSize=100`,
+        )
         id = list.items.find((p) => p.name === name)?.id
       }
       if (id) {
         const p = await request(`/policies/${id}`)
-        await request(`/policies/${id}/status`, { method: 'PATCH', data: { status: 'paused', version: p.version } })
+        await request(`/policies/${id}/status`, {
+          method: 'PATCH',
+          data: { status: 'paused', version: p.version },
+        })
         await request(`/policies/${id}`, { method: 'DELETE' })
       }
       if (originalReplicas !== undefined) {
         await request(`/workloads/${namespace}/${workload}/scale`, {
-          method: 'POST', data: { replicas: originalReplicas, reason: 'console acceptance restore' },
+          method: 'POST',
+          data: { replicas: originalReplicas, reason: 'console acceptance restore' },
         })
       }
     } catch (error) {
       await fs.mkdir(output, { recursive: true })
-      await fs.writeFile(`${output}/console.json`, JSON.stringify({ passed: false, cleanupError: error.message }, null, 2))
+      await fs.writeFile(
+        `${output}/console.json`,
+        JSON.stringify({ passed: false, cleanupError: error.message }, null, 2),
+      )
       throw error
     } finally {
       await browser.close()
     }
   }
-})().catch((error) => { console.error(error); process.exitCode = 1 })
+})().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})

@@ -31,7 +31,7 @@ cp backend/.env.example backend/.env.local  # 首次配置，按环境修改
 
 | 文档 | 内容 |
 | --- | --- |
-| [架构与边界](docs/architecture.md) | 组件、控制流程、存储与安全约束 |
+| [架构与边界](docs/architecture.md) | 整体架构图、模块关系、伸缩时序、数据归属与部署边界 |
 | [API](docs/api.md) | 当前路由、参数与告警接入 |
 | [指标口径](docs/metrics.md) | 单位、计算、质量与图表限制 |
 | [目录说明](docs/project-structure.md) | 源码、部署和验证资源 |

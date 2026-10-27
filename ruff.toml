@@ -1,0 +1,6 @@
+# Python 验收脚本的格式与导入约定。
+target-version = "py310"
+line-length = 100
+
+[lint]
+extend-select = ["I"]

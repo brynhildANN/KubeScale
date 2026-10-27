@@ -4,6 +4,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 __pycache__/
+.ruff_cache/
 *.py[cod]
 
 # Local settings and credentials (keep distributable examples)
