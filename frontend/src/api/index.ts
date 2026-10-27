@@ -1,4 +1,4 @@
-// 统一业务 API：在 Mock 与真实 HTTP 请求之间切换，页面通过此模块访问数据。
+// 统一业务 API：所有业务数据与操作均通过后端 HTTP 接口。
 import axios from 'axios'
 import type {
   Alert,
@@ -14,12 +14,8 @@ import type {
   Settings,
   Workload,
 } from '@/types'
-import * as mock from '@/mock/data'
 import { apiErrorMessage } from '@/api/errors'
 
-// 只有明确设置为 false 才访问后端，其余情况使用本地演示数据。
-export const isMock = import.meta.env.VITE_USE_MOCK !== 'false'
-const mockScenario = import.meta.env.VITE_MOCK_SCENARIO || 'normal'
 const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
   timeout: 12000,
@@ -30,28 +26,17 @@ http.interceptors.response.use(
   (response) => response,
   (error: unknown) => Promise.reject(new Error(apiErrorMessage(error))),
 )
-const wait = () => new Promise((resolve) => setTimeout(resolve, 160))
-const result = async <T>(value: T): Promise<T> => {
-  await wait()
-  if (mockScenario === 'connection-error') throw new Error('演示：后端连接失败')
-  return structuredClone(value)
-}
 const get = async <T>(path: string, params?: Record<string, unknown>): Promise<T> =>
   (await http.get<T>(path, { params })).data
 const enc = encodeURIComponent
 const workloadPath = (namespace: string, name: string) =>
   `/workloads/${enc(namespace)}/${enc(name)}`
 
-// 页面只调用此对象的方法，集中维护真实接口路径、请求参数与 Mock 行为。
 export const api = {
-  namespaces: async (): Promise<string[]> =>
-    isMock
-      ? result([...new Set(mock.workloads.map((w) => w.namespace))])
-      : get<string[]>('/namespaces'),
-  settings: async (): Promise<Settings> =>
-    isMock ? result(mock.settings) : get<Settings>('/settings'),
+  namespaces: async (): Promise<string[]> => get<string[]>('/namespaces'),
+  settings: async (): Promise<Settings> => get<Settings>('/settings'),
   overview: async (namespace?: string): Promise<Overview> =>
-    isMock ? result(mock.overview(namespace)) : get<Overview>('/overview', { namespace }),
+    get<Overview>('/overview', { namespace }),
   workloads: async (
     query: {
       namespace?: string
@@ -61,37 +46,13 @@ export const api = {
       page?: number
       pageSize?: number
     } = {},
-  ): Promise<Page<Workload>> => {
-    if (!isMock) return get<Page<Workload>>('/workloads', query)
-    if (mockScenario === 'empty') return result(mock.page<Workload>([]))
-    let items = mock.workloads.filter(
-      (w) =>
-        (!query.namespace || w.namespace === query.namespace) &&
-        (!query.q || w.name.toLowerCase().includes(query.q.toLowerCase())) &&
-        (!query.health || w.health === query.health),
-    )
-    if (query.metricIssue)
-      items = items.filter((w) => w.cpuUtilization.quality !== 'ok' || w.rps.quality !== 'ok')
-    return result(mock.page(items, query.page, query.pageSize))
-  },
-  workload: async (namespace: string, name: string): Promise<Workload> => {
-    if (!isMock) return get<Workload>(workloadPath(namespace, name))
-    const item = mock.workloads.find((w) => w.namespace === namespace && w.name === name)
-    if (!item) throw new Error('工作负载不存在')
-    return result(item)
-  },
+  ): Promise<Page<Workload>> => get<Page<Workload>>('/workloads', query),
+  workload: async (namespace: string, name: string): Promise<Workload> =>
+    get<Workload>(workloadPath(namespace, name)),
   pods: async (namespace: string, name: string): Promise<Page<Pod>> =>
-    isMock
-      ? result(mock.pods(namespace, name))
-      : get<Page<Pod>>(`${workloadPath(namespace, name)}/pods`),
+    get<Page<Pod>>(`${workloadPath(namespace, name)}/pods`),
   workloadEvents: async (namespace: string, name: string): Promise<Page<Operation>> =>
-    isMock
-      ? result(
-          mock.page(
-            mock.operations.filter((o) => o.namespace === namespace && o.workloadName === name),
-          ),
-        )
-      : get<Page<Operation>>(`${workloadPath(namespace, name)}/events`),
+    get<Page<Operation>>(`${workloadPath(namespace, name)}/events`),
   series: async (
     metricIds: string[],
     from: string,
@@ -99,158 +60,42 @@ export const api = {
     namespace?: string,
     workload?: string,
   ): Promise<SeriesResponse> =>
-    isMock
-      ? result(mock.series(metricIds, from, to, namespace, workload))
-      : get<SeriesResponse>('/metrics/series', {
-          scope: workload ? 'workload' : 'cluster',
-          namespace,
-          workload,
-          metricIds: metricIds.join(','),
-          from,
-          to,
-        }),
+    get<SeriesResponse>('/metrics/series', {
+      scope: workload ? 'workload' : 'cluster',
+      namespace,
+      workload,
+      metricIds: metricIds.join(','),
+      from,
+      to,
+    }),
   policies: async (
     query: { namespace?: string; page?: number; pageSize?: number } = {},
-  ): Promise<Page<Policy>> =>
-    isMock
-      ? result(
-          mock.page(
-            mock.policies.filter((p) => !query.namespace || p.namespace === query.namespace),
-            query.page,
-            query.pageSize,
-          ),
-        )
-      : get<Page<Policy>>('/policies', query),
-  policy: async (id: string): Promise<Policy> => {
-    if (!isMock) return get<Policy>(`/policies/${enc(id)}`)
-    const item = mock.policies.find((p) => p.id === id)
-    if (!item) throw new Error('策略不存在')
-    return result(item)
-  },
+  ): Promise<Page<Policy>> => get<Page<Policy>>('/policies', query),
+  policy: async (id: string): Promise<Policy> => get<Policy>(`/policies/${enc(id)}`),
   createPolicy: async (draft: PolicyDraft): Promise<Policy> =>
-    isMock ? result(mock.createPolicy(draft)) : (await http.post<Policy>('/policies', draft)).data,
-  updatePolicy: async (id: string, draft: PolicyDraft, version: number): Promise<Policy> => {
-    if (!isMock) return (await http.put<Policy>(`/policies/${enc(id)}`, { ...draft, version })).data
-    const index = mock.policies.findIndex((p) => p.id === id)
-    if (index < 0) throw new Error('策略不存在')
-    mock.policies[index] = {
-      ...mock.policies[index],
-      ...draft,
-      version: version + 1,
-      updatedAt: new Date().toISOString(),
-    }
-    return result(mock.policies[index])
-  },
-  setPolicyStatus: async (id: string, status: PolicyStatus, version: number): Promise<Policy> => {
-    if (!isMock)
-      return (await http.patch<Policy>(`/policies/${enc(id)}/status`, { status, version })).data
-    const policy = mock.policies.find((p) => p.id === id)
-    if (!policy) throw new Error('策略不存在')
-    const w = mock.workloads.find(
-      (w) => w.namespace === policy.namespace && w.name === policy.workloadName,
-    )
-    if (status === 'enabled' && w && ['hpa', 'external'].includes(w.controllerSource))
-      throw new Error('工作负载已由其他控制器管理')
-    policy.status = status
-    policy.version++
-    policy.updatedAt = new Date().toISOString()
-    if (w) {
-      w.controllerSource = status === 'disabled' ? 'manual' : 'kubescale'
-    }
-    return result(policy)
-  },
+    (await http.post<Policy>('/policies', draft)).data,
+  updatePolicy: async (id: string, draft: PolicyDraft, version: number): Promise<Policy> =>
+    (await http.put<Policy>(`/policies/${enc(id)}`, { ...draft, version })).data,
+  setPolicyStatus: async (id: string, status: PolicyStatus, version: number): Promise<Policy> =>
+    (await http.patch<Policy>(`/policies/${enc(id)}/status`, { status, version })).data,
   deletePolicy: async (id: string): Promise<void> => {
-    if (!isMock) {
-      await http.delete(`/policies/${enc(id)}`)
-      return
-    }
-    const index = mock.policies.findIndex((p) => p.id === id)
-    if (index < 0) throw new Error('策略不存在')
-    if (mock.policies[index].status === 'enabled') throw new Error('请先停用策略')
-    const w = mock.workloads.find((w) => w.policyId === id)
-    if (w) {
-      w.policyId = null
-      w.controllerSource = 'manual'
-    }
-    mock.policies.splice(index, 1)
-    await wait()
+    await http.delete(`/policies/${enc(id)}`)
   },
   validateMetric: async (
     namespace: string,
     workloadName: string,
     metric: MetricId,
     targetValue: number,
-  ): Promise<{ current: number | null; quality: string; preview: SeriesResponse }> => {
-    if (!isMock)
-      return (
-        await http.post('/policies/validate-metric', {
-          namespace,
-          workloadName,
-          metric,
-          targetValue,
-        })
-      ).data
-    const w = mock.workloads.find((w) => w.namespace === namespace && w.name === workloadName)
-    const value = metric === 'rps' ? w?.rps : w?.cpuUtilization
-    return result({
-      current: value?.value ?? null,
-      quality: value?.quality ?? 'missing',
-      preview: mock.series(
-        [metric],
-        new Date(Date.now() - 900000).toISOString(),
-        new Date().toISOString(),
-        namespace,
-        workloadName,
-      ),
-    })
-  },
+  ): Promise<{ current: number | null; quality: string; preview: SeriesResponse }> =>
+    (await http.post('/policies/validate-metric', { namespace, workloadName, metric, targetValue }))
+      .data,
   scale: async (
     namespace: string,
     name: string,
     replicas: number,
     reason: string,
-  ): Promise<{ operationId: string }> => {
-    if (!isMock)
-      return (await http.post(`${workloadPath(namespace, name)}/scale`, { replicas, reason })).data
-    if (mockScenario === 'scale-error') throw new Error('演示：Kubernetes Scale API 返回冲突')
-    const w = mock.workloads.find((w) => w.namespace === namespace && w.name === name)
-    if (!w) throw new Error('工作负载不存在')
-    if (
-      w.controllerSource === 'hpa' ||
-      w.controllerSource === 'external' ||
-      mock.policies.some(
-        (p) => p.namespace === namespace && p.workloadName === name && p.status === 'enabled',
-      )
-    )
-      throw new Error('该工作负载当前由自动伸缩控制器管理，请先暂停策略')
-    const old = w.desiredReplicas
-    w.desiredReplicas = replicas
-    w.readyReplicas = replicas
-    w.availableReplicas = replicas
-    w.lastScaleAt = new Date().toISOString()
-    const id = `op-${Date.now()}`
-    mock.operations.unshift({
-      id,
-      type: '手动伸缩',
-      status: 'succeeded',
-      namespace,
-      workloadName: name,
-      source: '管理员',
-      metricId: null,
-      metricValue: null,
-      targetValue: null,
-      oldReplicas: old,
-      candidateReplicas: replicas,
-      desiredReplicas: replicas,
-      actualReplicas: replicas,
-      checks: [],
-      errorCode: null,
-      errorMessage: null,
-      createdAt: w.lastScaleAt,
-      finishedAt: w.lastScaleAt,
-    })
-    return result({ operationId: id })
-  },
+  ): Promise<{ operationId: string }> =>
+    (await http.post(`${workloadPath(namespace, name)}/scale`, { replicas, reason })).data,
   operations: async (
     query: {
       namespace?: string
@@ -259,27 +104,8 @@ export const api = {
       page?: number
       pageSize?: number
     } = {},
-  ): Promise<Page<Operation>> =>
-    isMock
-      ? result(
-          mock.page(
-            mock.operations.filter(
-              (o) =>
-                (!query.namespace || o.namespace === query.namespace) &&
-                (!query.workload || o.workloadName === query.workload) &&
-                (!query.status || o.status === query.status),
-            ),
-            query.page,
-            query.pageSize,
-          ),
-        )
-      : get<Page<Operation>>('/operations', query),
-  operation: async (id: string): Promise<Operation> => {
-    if (!isMock) return get<Operation>(`/operations/${enc(id)}`)
-    const item = mock.operations.find((o) => o.id === id)
-    if (!item) throw new Error('操作不存在')
-    return result(item)
-  },
+  ): Promise<Page<Operation>> => get<Page<Operation>>('/operations', query),
+  operation: async (id: string): Promise<Operation> => get<Operation>(`/operations/${enc(id)}`),
   alerts: async (
     query: {
       namespace?: string
@@ -289,42 +115,11 @@ export const api = {
       page?: number
       pageSize?: number
     } = {},
-  ): Promise<Page<Alert>> =>
-    isMock
-      ? result(
-          mock.page(
-            mock.alerts.filter(
-              (a) =>
-                (!query.namespace || a.namespace === query.namespace) &&
-                (!query.status || a.status === query.status) &&
-                (!query.workload || a.workloadName === query.workload) &&
-                (!query.severity || a.severity === query.severity),
-            ),
-            query.page,
-            query.pageSize,
-          ),
-        )
-      : get<Page<Alert>>('/alerts', query),
+  ): Promise<Page<Alert>> => get<Page<Alert>>('/alerts', query),
   alertSummary: async (
     namespace?: string,
     workload?: string,
-  ): Promise<{ active: number; critical: number }> => {
-    if (!isMock) return get('/alerts/summary', { namespace, workload })
-    const items = mock.alerts.filter(
-      (a) =>
-        a.status === 'firing' &&
-        (!namespace || a.namespace === namespace) &&
-        (!workload || a.workloadName === workload),
-    )
-    return result({
-      active: items.length,
-      critical: items.filter((a) => a.severity === 'critical').length,
-    })
-  },
-  alert: async (id: string): Promise<Alert> => {
-    if (!isMock) return get<Alert>(`/alerts/${enc(id)}`)
-    const item = mock.alerts.find((a) => a.id === id)
-    if (!item) throw new Error('告警不存在')
-    return result(item)
-  },
+  ): Promise<{ active: number; critical: number }> =>
+    get('/alerts/summary', { namespace, workload }),
+  alert: async (id: string): Promise<Alert> => get<Alert>(`/alerts/${enc(id)}`),
 }

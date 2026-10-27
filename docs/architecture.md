@@ -1,107 +1,55 @@
-# KubeScale 项目设计
+# 架构与边界
 
-> 阶段三的当前实施契约见 [阶段三设计](phase3-design.md)：先交付告警持久化与轮询，SSE 后置；远程监听必须显式开启，浏览器入口仅用于受限演示访问。本文其他内容保留总体架构规划。
-
-## 1. 目标与边界
-
-KubeScale 面向 Kubernetes Deployment，提供 CPU 与业务请求量驱动的自动伸缩，以及相关状态、指标、决策和告警的统一查看。首版支持单个 Kubernetes 集群、单实例 Go 服务；只有被启用策略明确选中的 Deployment 才由 KubeScale 管理。
-
-系统通过 `deployments/scale` 子资源修改副本数，不直接删除 Pod。Prometheus 保存指标历史，SQLite 保存业务数据。多实例部署、数据库迁移和高可用协调留待后续版本。
-
-## 2. 业务闭环与组件
+## 组件
 
 ```mermaid
 flowchart LR
-    K[k6 流量] --> APP[测试应用]
-    APP --> PROM[Prometheus]
-    KSM[kube-state-metrics] --> PROM
-    PROM --> CTRL[Go 控制循环]
-    CTRL --> ENGINE[规则与决策引擎]
-    ENGINE --> SAFE[安全检查]
-    SAFE --> SCALE[Kubernetes Scale API]
-    SCALE --> DEP[Deployment Controller / Pod]
-    CTRL --> DB[(SQLite)]
-    PROM --> AM[告警规则 / Alertmanager]
-    AM --> API[Go API]
-    API --> DB
-    UI[Vue 3 控制台] <-->|REST / SSE| API
-    API --> PROM
-    API --> K8S[Kubernetes API]
+  UI[Vue 控制台] -->|REST / 轮询| API[Go API]
+  API --> K8S[Kubernetes API]
+  API --> PROM[Prometheus]
+  API --> DB[(SQLite)]
+  CTRL[同进程控制循环] --> PROM
+  CTRL --> DB
+  CTRL -->|deployments/scale| K8S
+  AM[Alertmanager] -->|Bearer Webhook| API
+  APP[应用 / 指标采集器] --> PROM
 ```
 
-Go 服务包含 API、控制循环、指标查询、策略计算、Kubernetes 访问、持久化和事件推送。控制循环定期读取启用策略，查询指标，计算目标副本数，执行安全检查，调用 Scale API，再记录实际结果。API 向前端提供策略、工作负载、指标、事件和告警数据；SSE 推送新增事件。Alertmanager 通过 Webhook 将告警发送到 API。
+单个 Go 进程承载 API 与定时控制循环，共享 Kubernetes、Prometheus 客户端和 SQLite。浏览器只访问 Go API，开发时由 Vite 代理。Prometheus 保存时序指标；SQLite 的 `policies`、`operations`、`alerts` 保存 JSON 业务对象及索引列，启动时创建所需表。
 
-## 3. 主要模块
+## 伸缩闭环
 
-| 模块 | 职责 |
-| --- | --- |
-| 指标查询 | 向 Prometheus 查询 CPU、RPS 和辅助观测指标；识别空值、过期值及查询失败。 |
-| 策略与决策 | 解析策略、计算目标副本数、检查连续触发次数与上下限。 |
-| 安全控制 | 检查冷却期、稳定窗口、滚动更新、Ready 状态、并发操作与控制权。 |
-| Kubernetes 访问 | 读取 Deployment、Pod、Node 和 Event；通过 Scale API 读写副本。 |
-| API 与 SSE | 管理策略，查询状态与历史，接收告警 Webhook，推送事件。 |
-| 持久化 | SQLite 保存策略、决策记录和告警事件。 |
-| 前端控制台 | 概览、工作负载、伸缩策略、操作记录、告警中心、系统设置。 |
+每个 Deployment 最多保存一条策略，支持 CPU 或 RPS 目标值模式：
 
-工作负载详情包含概览、指标、自动伸缩、Pod 和事件视图。Grafana 用于开发验证，产品控制台直接展示核心图表。
+- CPU：`ceil(当前副本 × CPU 使用比例 / 目标比例)`。
+- RPS：`ceil(总 RPS / 单 Pod 目标 RPS)`。
 
-## 4. 伸缩策略
+控制循环按策略采样周期读取 Deployment/Scale，检查就绪、滚动更新和 HPA 控制权；按 Deployment selector 获取 Ready Pod，核对指标覆盖与原始采样时间，再计算受上下限约束的候选副本。通过连续触发、缩容稳定窗口和冷却期检查后，带资源版本更新 Scale，并重新读取核对结果。
 
-### 4.1 首版指标
+指标缺失、过期、非有限值、覆盖不全或依赖异常时保守跳过。只写 `deployments/scale`，不直接删除 Pod。手动伸缩要求先暂停自动策略，并检查控制权冲突。HPA 检查不代表能够识别所有外部控制器。
 
-- **CPU 利用率**：工作负载内 Pod 的 CPU 使用量相对于 CPU Request 的百分比。没有有效 CPU Request 时不可使用该指标进行决策。
-- **RPS**：工作负载的每秒 HTTP 请求数。示例 PromQL：`sum(rate(http_requests_total{namespace="autoscale-demo",app="demo-custom"}[1m]))`。应用须暴露相应指标且 Prometheus 能抓取。
+稳定窗口收集所有有效副本建议；重启后重新累计连续次数和稳定窗口，首次缩容需等待完整窗口。已完成伸缩的冷却时间从操作历史恢复。操作保存策略快照、版本、指标采样时间、判断原因及副本结果；写后核对的是 Scale.spec，Pod Ready 需单独观察。
 
-首版每条策略选择一个决策指标（CPU 或 RPS）；一个 Deployment 同时只启用一条伸缩策略。内存、P50/P95/P99 延迟、5xx 错误率、Pod 重启、Pending/Ready Pod 和节点资源作为辅助观测指标，之后可扩展为决策指标。PromQL 由可信管理员配置，服务端限制查询范围、超时与结果类型。
+## 告警闭环
 
-### 4.2 计算与控制
+Webhook 以 Bearer 密钥校验来源，按全部 labels 与 startsAt 标识一个触发周期。重复通知合并；resolved 为该周期终态，迟到 firing 不会重新激活；新 startsAt 代表再次触发。批量通知在同一事务提交，校验失败拒绝整批。namespace 必须在管理白名单内，workload 标签用于工作负载关联。
 
-CPU 目标值模式：`期望副本数 = ceil(当前副本数 × 当前 CPU 利用率 / 目标 CPU 利用率)`。RPS 按单 Pod 承载目标计算：`期望副本数 = ceil(当前总 RPS / 单 Pod 目标 RPS)`。两者均受最小与最大副本数约束。阈值步长模式可以作为后续策略类型：连续达到扩容或缩容阈值后，分别按配置步长调整。
+告警列表、详情和全量活动/严重统计由 API 提供，前端轮询刷新。告警与伸缩解耦。当前告警查询先读取再筛选分页，适合小规模单实例使用，尚无数据保留策略。
 
-控制循环依次进行：读取策略 → 查询指标 → 校验指标新鲜度 → 计算候选副本数 → 连续触发检查 → 冷却期检查 → 稳定窗口检查 → 健康及控制权检查 → 上下限检查 → 调用 Scale API → 核对结果 → 保存决策。未通过检查时记录跳过原因，不修改副本数。
+## 运行与安全边界
 
-策略字段包括：名称、命名空间、Deployment、指标类型、PromQL 或指标选择器、目标值、扩缩阈值、最小/最大副本数、连续触发次数、扩缩步长、采样间隔、冷却时间、稳定窗口和启用状态。采用目标值模式时，阈值与步长字段不参与计算；采用阈值步长模式时，目标值不参与计算，避免两套规则同时生效。
+- 默认监听 `127.0.0.1:8080`；非回环监听要求 `KUBESCALE_ALLOW_REMOTE=true` 且 Webhook 密钥非空。该密钥仅保护 Webhook。
+- 管理 API 尚无用户身份认证与写权限控制；共享环境需受控代理或网络隔离。管理命名空间由 `KUBESCALE_NAMESPACES` 限定。
+- RBAC 样例在 `deploy/rbac/`：资源读取与 Scale 写入按目标命名空间授权，节点读取单独授予集群只读权限。
+- 当前无 SSE、多实例协调和高可用；部署目录仅有 RBAC 与 ServiceMonitor 样例，未提供完整镜像/PVC 部署包及备份恢复流程。
+- Alertmanager 连通性探测未实现；真实通知路由和告警浏览器交互仍需环境联调。
 
-可供验证的阈值步长示例：每 15 秒采样；CPU 高于 70% 连续 3 次扩容 2 个副本，低于 30% 连续 5 次缩容 1 个副本；副本范围 1～8；冷却期 120 秒；缩容稳定窗口 300 秒。实际默认值应在实现时根据测试应用和集群容量确定。
+## 维护边界
 
-### 4.3 安全约束
+修改控制流程时，重点核对策略修改/暂停与协调循环并发时的版本和写入语义、连续触发中断及重启恢复。Scale 写入成功但核对或持久化失败时，需检查操作记录、冷却期和统计是否一致。
 
-- 拒绝空值、非有限值、过期指标和 Prometheus 查询错误；指标不可用时保持副本数。
-- 工作负载滚动更新中、Ready 副本不足或上次伸缩尚未完成时，暂缓下一次伸缩。
-- 扩容与缩容分别统计连续命中；冷却期限制频繁操作，稳定窗口抑制短时缩容抖动。
-- 读取最新 Scale 资源后更新，并处理资源版本冲突；记录期望值与实际观察值。
-- 策略启用前检查同一 Deployment 是否已有 HPA 或其他副本控制者；存在冲突时拒绝接管并给出原因。人工暂停后不再自动写入副本数。
-- 使用最小权限 RBAC，不授予 `cluster-admin`。
+指标相关改动需保持 Deployment selector、Ready Pod、CPU Request、覆盖检查与采样新鲜度的口径一致。历史查询按现存 Pod 过滤，可能遗漏已删除 Pod；series 查询失败可能表现为空点集，不能据此认定没有历史数据。
 
-## 5. 指标与可观测性
+告警改动需覆盖重复、恢复、迟到通知、再次触发、事务回滚和命名空间隔离。前端改动需检查并发请求、错误反馈、版本冲突、空指标展示及图表销毁；业务类型需同步核对 `frontend/src/types.ts` 与 `backend/internal/model/model.go`。
 
-Prometheus 查询覆盖 CPU、RPS；辅助展示内存使用率、请求延迟、错误率、Deployment 期望/当前/Ready/Available 副本、Pod 状态和重启次数、节点可分配与已请求资源。Kubernetes 对象状态来自 kube-state-metrics 或 Kubernetes API。
-
-控制器自身暴露：`kubescale_reconcile_total`、`kubescale_reconcile_errors_total`、`kubescale_scaling_actions_total`、`kubescale_scaling_failures_total`、`kubescale_current_replicas`、`kubescale_desired_replicas`、`kubescale_last_scaling_timestamp`、`kubescale_metric_query_duration_seconds`、`kubescale_reconcile_duration_seconds`。标签限定为命名空间、工作负载、动作、状态、指标类型等低基数值，不使用 Pod UID 或错误文本作为标签。
-
-Prometheus 告警规则判断异常，Alertmanager 负责分组、去重和通知；API 接收 Webhook、保存告警事件并通过 SSE 推送到前端。告警处理和伸缩决策解耦，告警不会直接触发副本变更。
-
-## 6. 数据与接口
-
-SQLite 计划包含以下表：
-
-- `scaling_rules`：策略 ID、名称、namespace、workload_name、metric_type、promql、目标值、扩缩阈值、连续次数、步长、副本上下限、冷却与稳定窗口、enabled、创建和更新时间。
-- `scaling_events`：事件 ID、rule_id、action、metric_value、old_replicas、desired_replicas、actual_replicas、reason、status、error_message、created_at。
-- `alert_events`：事件 ID、告警名称、severity、namespace、workload_name、message、status、starts_at、ends_at、created_at。
-
-REST API 规划为 `/api/v1/workloads`、`/api/v1/workloads/{namespace}/{name}`、`/api/v1/policies`、`/api/v1/operations`、`/api/v1/alerts`、`/api/v1/metrics/series`；`/api/v1/events/stream` 提供 SSE，`/api/v1/webhooks/alertmanager` 接收告警。字段、分页与错误约定见 [API 契约草案](api.md)，指标口径见[指标设计](metrics.md)。实现前应以 OpenAPI 固定契约。阶段二通过轮询与手动刷新更新数据，不实现 SSE、身份验证与权限控制；上述 SSE 能力保留为后续设计。Webhook 必须配置鉴权或网络访问限制；前端 API 需身份验证与策略写操作授权。
-
-## 7. Kubernetes 部署
-
-| 命名空间 | 计划部署内容 |
-| --- | --- |
-| `monitoring` | Prometheus、Alertmanager、Grafana、kube-state-metrics。 |
-| `kubescale-system` | 单实例 Go 服务、Vue 前端、ServiceAccount、RBAC、SQLite PVC。 |
-| `autoscale-demo` | 暴露 HTTP 与 Prometheus 指标的测试应用、Service。 |
-| `load-test` | k6 测试任务。 |
-
-Go ServiceAccount 对目标命名空间的 Deployment、Pod、Event、ReplicaSet 和 HorizontalPodAutoscaler 需要只读权限，以读取状态并检查控制权冲突；读取节点时单独配置集群级只读权限；对 `deployments/scale` 仅授予 `get`、`update`、`patch`。写入权限应按允许管理的命名空间收敛。部署配置在 `deploy/` 中维护，本地环境和演示资源在 `examples/` 中维护。
-
-## 8. 版本演进
-
-首版使用单实例 Go 服务和 SQLite，避免多个控制循环同时对同一目标写入。需要多副本高可用时，再评估 PostgreSQL、Leader Election、任务所有权及共享事件分发。每个阶段的交付物见[阶段计划](roadmap.md)。
+接口与指标细节分别见 [API](api.md)和[指标口径](metrics.md)，模块位置见[目录说明](project-structure.md)，开发检查命令见前后端 README。

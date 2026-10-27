@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 设置页：展示集群与服务连接状态，并提供界面偏好设置。
 import { onMounted, ref, watch } from 'vue'
-import { api, isMock } from '@/api'
+import { api } from '@/api'
 import StatePanel from '@/components/StatePanel.vue'
 import { useUiStore } from '@/stores/ui'
 import type { Settings } from '@/types'
@@ -95,7 +95,7 @@ watch(() => ui.refreshKey, load)
           v-for="[label, value] in [
             ['运行状态', data.controllerConnected ? '运行中' : '不可用'],
             ['最近心跳', formatTime(data.controllerLastHeartbeat)],
-            ['数据模式', isMock ? 'Mock 演示' : '真实 API'],
+            ['数据来源', '后端 API'],
           ]"
           :key="label"
           class="info-row"

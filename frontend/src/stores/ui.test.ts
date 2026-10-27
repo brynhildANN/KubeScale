@@ -5,7 +5,6 @@ import { useUiStore } from './ui'
 
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.stubEnv('VITE_USE_MOCK', 'false')
   vi.stubEnv('VITE_ENABLE_SSE', 'false')
   vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() })
   vi.stubGlobal('document', { documentElement: { dataset: {}, classList: { toggle: vi.fn() } } })

@@ -3,7 +3,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
-import { api, isMock } from '@/api'
+import { api } from '@/api'
 import { useUiStore } from '@/stores/ui'
 import type { Settings } from '@/types'
 import { relativeTime } from '@/utils'
@@ -76,7 +76,7 @@ watch(
           <span class="online-dot" />
           {{ settings?.clusterName || '正在连接集群' }}
         </div>
-        <small>{{ isMock ? '演示数据模式' : '实时集群模式' }} · v0.1</small>
+        <small>实时集群模式 · v0.1</small>
       </div>
     </aside>
     <div class="main-frame">
@@ -148,11 +148,9 @@ watch(
         </span>
         <span class="statusbar-right">
           {{
-            isMock
-              ? 'Mock 数据 · 无真实集群操作'
-              : ui.liveStatus === 'polling'
-                ? '每 30 秒自动刷新 · 支持手动刷新'
-                : `事件流：${ui.liveStatus}`
+            ui.liveStatus === 'polling'
+              ? '每 30 秒自动刷新 · 支持手动刷新'
+              : `事件流：${ui.liveStatus}`
           }}
           <span v-if="settings?.controllerLastHeartbeat">
             · 心跳 {{ relativeTime(settings.controllerLastHeartbeat) }}

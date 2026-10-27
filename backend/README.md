@@ -1,40 +1,45 @@
 # KubeScale 后端
 
-Go 服务同时运行 REST API 与单实例伸缩控制循环。启动时从 Kubernetes 集群读取 Deployment/Pod，向 Prometheus 查询指标，通过 `deployments/scale` 写入副本，并把策略与决策存入 SQLite。
-
-## 前置条件
-
-- Go 1.27 或兼容版本；可访问目标集群的 kubeconfig。
-- 集群已有 Prometheus、kube-state-metrics、容器 CPU 使用量采集；演示应用暴露 `http_requests_total`。
-- Prometheus 抓取的业务指标必须有 `namespace`、`app`、`pod` 标签。每个 Ready Pod 都应有对应序列；CPU 决策要求每个容器配置 CPU Request。
-- 阶段一 API 只监听回环地址，供本机开发。部署到共享网络前需要实现身份验证与写权限控制。
+单个 Go 服务承载 REST API 和伸缩控制循环，使用 Kubernetes Scale API、Prometheus 与 SQLite。架构见[项目文档](../docs/architecture.md)。
 
 ## 本机启动
 
-```powershell
-$env:KUBESCALE_NAMESPACES = 'autoscale-demo'
-$env:KUBESCALE_PROMETHEUS_URL = 'http://127.0.0.1:9090'
-$env:KUBECONFIG = "$HOME/.kube/config"
+需要与 [go.mod](go.mod) 匹配的 Go 工具链、目标集群 kubeconfig、Prometheus 和容器 CPU 指标采集。RPS 应用需暴露带 namespace、pod 等标签的 `http_requests_total`；CPU 决策要求容器配置 CPU Request，指标需覆盖全部目标 Ready Pod。
+
+推荐在项目根目录运行 `./scripts/dev.sh`，同时启动前后端。脚本自动读取存在的 `backend/.env.local`（可信 Bash 配置，覆盖同名环境变量），也支持 `--env /path/to/config`；连接检查、端口与退出行为见[项目入口](../README.md#开发与运行)。
+
+单独启动时，在 `backend` 目录运行：
+
+```bash
+export KUBESCALE_NAMESPACES=autoscale-demo
+export KUBESCALE_PROMETHEUS_URL=http://127.0.0.1:9090
+export KUBECONFIG="$HOME/.kube/config"
 go run ./cmd/kubescale
 ```
 
-如 Prometheus 在集群内，可先执行 `kubectl -n monitoring port-forward svc/<prometheus-service> 9090:9090`。具体 Service 名称按安装方式确认。其他配置见 [.env.example](.env.example)。`KUBESCALE_NAMESPACES` 必填，可用逗号列出多个命名空间；服务只对这些命名空间执行读取和伸缩。
+集群内 Prometheus 可通过 `kubectl -n monitoring port-forward svc/<prometheus-service> 9090:9090` 访问；Service 名称以实际安装为准。环境变量样例见 [.env.example](.env.example)，直接运行 Go 服务时需导出到进程环境，服务本身不会自动加载环境文件。
 
-前端在 `VITE_USE_MOCK=false` 时，经 Vite 代理访问本机 `http://127.0.0.1:8080`。API 入口为 `/api/v1`，控制器自身指标在 `/metrics`。
+| 配置 | 默认值 / 用途 |
+| --- | --- |
+| `KUBESCALE_NAMESPACES` | 必填，逗号分隔的管理命名空间 |
+| `KUBESCALE_LISTEN` | `127.0.0.1:8080` |
+| `KUBESCALE_SQLITE_PATH` | `./kubescale.db` |
+| `KUBESCALE_PROMETHEUS_URL` | `http://127.0.0.1:9090` |
+| `KUBESCALE_CONTROLLER_INTERVAL` | `15s` |
+| `KUBESCALE_METRIC_MAX_AGE` | `90s` |
+| `KUBESCALE_QUERY_TIMEOUT` | `8s` |
+| `KUBESCALE_CLUSTER_NAME` | `local-cluster` |
+| `KUBESCALE_WEBHOOK_TOKEN` | 空时禁用 Webhook，非空时作为 Bearer 密钥 |
+| `KUBESCALE_ALLOW_REMOTE` | 默认关闭；非回环监听需设为 true 且配置 Webhook 密钥 |
 
-## 决策过程
+时间配置支持秒数或 Go 时长字符串。默认 API `/api/v1`，健康检查 `/healthz`，自身指标 `/metrics`。管理接口尚无用户认证；远程监听应配合受控代理或网络隔离，Webhook 密钥仅保护告警接收接口。Alertmanager 配置与通知示例见 [API](../docs/api.md)。
 
-每个启用策略按采样周期执行：检查 Deployment 就绪与 HPA 冲突 → 查询目标 Pod 指标与原始采样时间 → 计算候选副本 → 连续触发、缩容稳定窗口与冷却期检查 → 使用 Scale API 更新 → 再读取 Scale 核对 → 保存操作记录。指标缺失、过期、Pod 覆盖不全、滚动更新或 HPA 冲突时跳过写入并记录原因。
+## 验证与演示
 
-CPU 目标值为 0～1 的比例；RPS 目标值为每 Pod req/s。每个 Deployment 最多保存一条策略。缩容稳定窗口收集所有有效建议（包括不变和扩容），首次观测以当前副本初始化；窗口内较高建议未过期时不缩容。策略版本改变、暂停被控制循环观察到或删除后，清理旧连续次数和稳定窗口；服务重启后重新累计，首次缩容需等待完整稳定窗口。已完成伸缩的冷却期从 SQLite 操作历史恢复。
-
-自动决策记录保存当时的策略配置、版本和指标采样时间，修改或删除策略后仍可核对历史。阶段二实现与验收见[说明](../docs/phase2-implementation.md)。
-
-## 验证
-
-```powershell
+```bash
 go test ./...
+go vet ./...
 go run ./cmd/demo-app
 ```
 
-演示应用镜像及 Kubernetes 资源在 [examples/demo-app](../examples/demo-app)，简单负载脚本在 [tests/load/k6/phase1-smoke.js](../tests/load/k6/phase1-smoke.js)。端到端验收步骤见 [阶段一说明](../docs/phase1-implementation.md)。
+演示镜像和 Kubernetes 资源见 [examples/demo-app](../examples/demo-app)，RBAC 见 [deploy/rbac](../deploy/rbac)，负载脚本见 [tests/load/k6](../tests/load/k6)。`scripts/` 中的验收与演示脚本可能创建策略、调整副本或修改 Service，运行前检查参数。决策保护、重启恢复和实际副本语义见[架构](../docs/architecture.md)。
