@@ -38,8 +38,9 @@ const detailRows = computed(() => {
       </div>
       <p class="callout">{{ detail.summary }}</p>
       <router-link
+        v-if="detail.workloadName"
         class="link"
-        :to="`/workloads/${detail.namespace}/${detail.workloadName}`"
+        :to="`/workloads/${encodeURIComponent(detail.namespace)}/${encodeURIComponent(detail.workloadName)}`"
         @click="visible = false"
       >
         查看工作负载指标与事件 →

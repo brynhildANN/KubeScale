@@ -120,3 +120,17 @@ type Page[T any] struct {
 
 // Ptr 将值转为指针，用于区分 JSON 字段的零值与未提供。
 func Ptr[T any](v T) *T { return &v }
+
+// Alert 表示一个独立触发周期；恢复后该周期不再重新触发。
+type Alert struct {
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Severity     string            `json:"severity"`
+	Status       string            `json:"status"`
+	Namespace    string            `json:"namespace"`
+	WorkloadName string            `json:"workloadName"`
+	Summary      string            `json:"summary"`
+	StartsAt     time.Time         `json:"startsAt"`
+	EndsAt       *time.Time        `json:"endsAt"`
+	Labels       map[string]string `json:"labels"`
+}

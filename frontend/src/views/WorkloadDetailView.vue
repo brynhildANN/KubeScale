@@ -6,9 +6,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import MetricChart from '@/components/MetricChart.vue'
 import StatePanel from '@/components/StatePanel.vue'
+import AlertDetailDrawer from '@/components/alerts/AlertDetailDrawer.vue'
 import OperationDetailDrawer from '@/components/operations/OperationDetailDrawer.vue'
 import { useUiStore } from '@/stores/ui'
-import type { Operation, Page, Pod, Policy, SeriesResponse, Workload } from '@/types'
+import type { Alert, Operation, Page, Pod, Policy, SeriesResponse, Workload } from '@/types'
 import { formatMetric, formatTime, healthLabels, sourceLabels, statusLabels } from '@/utils'
 
 const route = useRoute(),
@@ -23,6 +24,13 @@ const loading = ref(true),
   pods = ref<Page<Pod> | null>(null),
   events = ref<Page<Operation> | null>(null),
   series = ref<SeriesResponse | null>(null)
+const alerts = ref<Alert[]>([])
+const alertDetail = ref<Alert | null>(null)
+const alertOpen = ref(false)
+function openAlert(item: Alert) {
+  alertDetail.value = item
+  alertOpen.value = true
+}
 const tab = ref('overview'),
   podDetail = ref<Pod | null>(null),
   podDrawer = ref(false),
@@ -63,7 +71,7 @@ async function load() {
       ui.range === 'custom' && customRange.value
         ? customRange.value[0]
         : new Date(to.getTime() - duration)
-    const [w, ev, ps, s] = await Promise.all([
+    const [w, ev, ps, s, alertPage] = await Promise.all([
       api.workload(namespace, name),
       api.workloadEvents(namespace, name),
       api.pods(namespace, name),
@@ -82,7 +90,9 @@ async function load() {
         namespace,
         name,
       ),
+      api.alerts({ namespace, workload: name, status: 'firing' }),
     ])
+    alerts.value = alertPage.items
     workload.value = w
     policy.value = w.policyId ? await api.policy(w.policyId) : null
     events.value = ev
@@ -150,6 +160,28 @@ async function togglePause() {
 }
 </script>
 <template>
+  <section
+    v-if="alerts.length"
+    class="card"
+  >
+    <h3>活动告警（最近 20 条）</h3>
+    <p
+      v-for="item in alerts"
+      :key="item.id"
+    >
+      <button
+        class="link"
+        @click="openAlert(item)"
+      >
+        {{ item.name }}：{{ item.summary }}
+      </button>
+    </p>
+  </section>
+  <AlertDetailDrawer
+    v-model="alertOpen"
+    :detail="alertDetail"
+  />
+
   <StatePanel
     :loading="loading"
     :error="error"

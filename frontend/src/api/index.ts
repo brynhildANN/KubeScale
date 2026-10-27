@@ -281,7 +281,14 @@ export const api = {
     return result(item)
   },
   alerts: async (
-    query: { namespace?: string; status?: string; page?: number; pageSize?: number } = {},
+    query: {
+      namespace?: string
+      workload?: string
+      severity?: string
+      status?: string
+      page?: number
+      pageSize?: number
+    } = {},
   ): Promise<Page<Alert>> =>
     isMock
       ? result(
@@ -289,13 +296,31 @@ export const api = {
             mock.alerts.filter(
               (a) =>
                 (!query.namespace || a.namespace === query.namespace) &&
-                (!query.status || a.status === query.status),
+                (!query.status || a.status === query.status) &&
+                (!query.workload || a.workloadName === query.workload) &&
+                (!query.severity || a.severity === query.severity),
             ),
             query.page,
             query.pageSize,
           ),
         )
       : get<Page<Alert>>('/alerts', query),
+  alertSummary: async (
+    namespace?: string,
+    workload?: string,
+  ): Promise<{ active: number; critical: number }> => {
+    if (!isMock) return get('/alerts/summary', { namespace, workload })
+    const items = mock.alerts.filter(
+      (a) =>
+        a.status === 'firing' &&
+        (!namespace || a.namespace === namespace) &&
+        (!workload || a.workloadName === workload),
+    )
+    return result({
+      active: items.length,
+      critical: items.filter((a) => a.severity === 'critical').length,
+    })
+  },
   alert: async (id: string): Promise<Alert> => {
     if (!isMock) return get<Alert>(`/alerts/${enc(id)}`)
     const item = mock.alerts.find((a) => a.id === id)

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 告警中心：加载筛选和分页数据，统计当前页活动/严重告警，查询选中告警的详情。
-import { computed, onMounted, ref, watch } from 'vue'
+// 告警中心：加载筛选和分页数据，统计所选命名空间全部活动/严重告警，查询选中告警的详情。
+import { onMounted, ref, watch } from 'vue'
 import { api } from '@/api'
 import StatePanel from '@/components/StatePanel.vue'
 import AlertDetailDrawer from '@/components/alerts/AlertDetailDrawer.vue'
@@ -15,28 +15,30 @@ const error = ref('')
 const data = ref<Page<Alert> | null>(null)
 
 const status = ref('')
+const severity = ref('')
+const summary = ref({ active: 0, critical: 0 })
 const page = ref(1)
 
 const detail = ref<Alert | null>(null)
 const drawer = ref(false)
-
-const active = computed(() => data.value?.items.filter((a) => a.status === 'firing').length ?? 0)
-const critical = computed(
-  () =>
-    data.value?.items.filter((a) => a.status === 'firing' && a.severity === 'critical').length ?? 0,
-)
 
 // 按命名空间、告警状态和页码查询列表，并更新加载与错误状态。
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    data.value = await api.alerts({
-      namespace: ui.namespace || undefined,
-      status: status.value || undefined,
-      page: page.value,
-      pageSize: 20,
-    })
+    const [list, counts] = await Promise.all([
+      api.alerts({
+        namespace: ui.namespace || undefined,
+        status: status.value || undefined,
+        severity: severity.value || undefined,
+        page: page.value,
+        pageSize: 20,
+      }),
+      api.alertSummary(ui.namespace || undefined),
+    ])
+    data.value = list
+    summary.value = counts
   } catch (e) {
     error.value = e instanceof Error ? e.message : '无法获取告警'
   } finally {
@@ -46,12 +48,23 @@ async function load() {
 
 // 查询点击告警的完整信息，再打开详情抽屉。
 async function open(row: Alert) {
-  detail.value = await api.alert(row.id)
-  drawer.value = true
+  try {
+    detail.value = await api.alert(row.id)
+    drawer.value = true
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '无法获取告警详情'
+  }
 }
 
 onMounted(load)
-watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
+watch(
+  () => [ui.namespace, status.value, severity.value],
+  () => {
+    if (page.value !== 1) page.value = 1
+    else void load()
+  },
+)
+watch(() => [ui.refreshKey, page.value], load)
 </script>
 
 <template>
@@ -69,12 +82,12 @@ watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
   >
     <div class="card kpi critical">
       <span class="label">活动告警</span>
-      <div class="value">{{ active }}</div>
+      <div class="value">{{ summary.active }}</div>
       <span class="accent" />
     </div>
     <div class="card kpi warning">
       <span class="label">严重告警</span>
-      <div class="value">{{ critical }}</div>
+      <div class="value">{{ summary.critical }}</div>
       <span class="accent" />
     </div>
     <div class="card kpi">
@@ -102,7 +115,28 @@ watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
           value="resolved"
         />
       </el-select>
-      <span class="muted">告警静默操作暂未提供</span>
+      <el-select
+        v-model="severity"
+        placeholder="严重程度"
+      >
+        <el-option
+          label="全部级别"
+          value=""
+        />
+        <el-option
+          label="严重"
+          value="critical"
+        />
+        <el-option
+          label="警告"
+          value="warning"
+        />
+        <el-option
+          label="信息"
+          value="info"
+        />
+      </el-select>
+      <span class="muted">每 30 秒自动刷新 · 告警静默操作暂未提供</span>
     </div>
     <StatePanel
       :loading="loading"
@@ -133,7 +167,9 @@ watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
               class="badge"
               :class="row.severity === 'critical' ? 'critical' : 'warning'"
             >
-              {{ row.severity === 'critical' ? '严重' : '警告' }}
+              {{
+                row.severity === 'critical' ? '严重' : row.severity === 'warning' ? '警告' : '信息'
+              }}
             </span>
           </template>
         </el-table-column>

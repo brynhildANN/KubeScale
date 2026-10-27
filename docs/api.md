@@ -1,3 +1,5 @@
+> 阶段三 3A 更新：告警列表、详情、Webhook 已实现；新增 `GET /alerts/summary?namespace=&workload=` 返回 `{active,critical}`。列表另支持 workload 筛选；工作负载关联使用 Webhook 的 workload 标签。鉴权、生命周期和当前交付边界以 [阶段三设计](phase3-design.md) 为准。SSE 仍未实现。下文早期阶段说明为历史背景。
+
 # 前后端 API 契约草案（v1）
 
 状态：**阶段一接口已实现，后续能力仍是设计草案**。基础路径 `/api/v1`，JSON 使用 camelCase，时间为 RFC 3339，查询时间参数为 UTC。列表使用 `page`（从 1 开始）、`pageSize`（默认 20，最大 100），返回 `{items,total,page,pageSize}`。具体已实现范围以[阶段一说明](phase1-implementation.md)为准。

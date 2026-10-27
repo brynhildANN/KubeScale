@@ -1,5 +1,7 @@
 # KubeScale 项目设计
 
+> 阶段三的当前实施契约见 [阶段三设计](phase3-design.md)：先交付告警持久化与轮询，SSE 后置；远程监听必须显式开启，浏览器入口仅用于受限演示访问。本文其他内容保留总体架构规划。
+
 ## 1. 目标与边界
 
 KubeScale 面向 Kubernetes Deployment，提供 CPU 与业务请求量驱动的自动伸缩，以及相关状态、指标、决策和告警的统一查看。首版支持单个 Kubernetes 集群、单实例 Go 服务；只有被启用策略明确选中的 Deployment 才由 KubeScale 管理。

@@ -56,4 +56,28 @@ describe('真实 API 请求', () => {
       adapter.mockRestore()
     }
   })
+  it('告警列表传递工作负载筛选，统计独立于分页', async () => {
+    vi.stubEnv('VITE_USE_MOCK', 'false')
+    const client = axios.create()
+    const adapter = vi.spyOn(axios, 'create').mockReturnValue(client)
+    const requests: { url?: string; params: unknown }[] = []
+    client.defaults.adapter = async (config) => {
+      requests.push({ url: config.url, params: config.params })
+      return { data: {}, status: 200, statusText: 'OK', headers: {}, config }
+    }
+    try {
+      const { api } = await import('./index')
+      await api.alerts({ namespace: 'demo', workload: 'api', severity: 'critical', page: 2 })
+      await api.alertSummary('demo', 'api')
+      expect(requests).toEqual([
+        {
+          url: '/alerts',
+          params: { namespace: 'demo', workload: 'api', severity: 'critical', page: 2 },
+        },
+        { url: '/alerts/summary', params: { namespace: 'demo', workload: 'api' } },
+      ])
+    } finally {
+      adapter.mockRestore()
+    }
+  })
 })

@@ -12,6 +12,8 @@ import (
 
 // Config 后端运行配置，包括集群范围、存储路径和控制/查询时间参数。
 type Config struct {
+	WebhookToken       string
+	AllowRemote        bool
 	ListenAddress      string
 	SQLitePath         string
 	PrometheusURL      string
@@ -23,9 +25,11 @@ type Config struct {
 	ClusterName        string
 }
 
-// Load 读取环境变量并验证配置；要求至少一个管理命名空间且 API 绑定回环地址。
+// Load 读取环境变量并验证配置；要求管理命名空间；非回环监听需要显式配置与 Webhook 密钥。
 func Load() (Config, error) {
 	c := Config{
+		WebhookToken:       strings.TrimSpace(os.Getenv("KUBESCALE_WEBHOOK_TOKEN")),
+		AllowRemote:        os.Getenv("KUBESCALE_ALLOW_REMOTE") == "true",
 		ListenAddress:      env("KUBESCALE_LISTEN", "127.0.0.1:8080"),
 		SQLitePath:         env("KUBESCALE_SQLITE_PATH", "./kubescale.db"),
 		PrometheusURL:      strings.TrimRight(env("KUBESCALE_PROMETHEUS_URL", "http://127.0.0.1:9090"), "/"),
@@ -48,7 +52,9 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid KUBESCALE_LISTEN: %w", err)
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return Config{}, fmt.Errorf("phase-one API must bind a loopback address; set KUBESCALE_LISTEN to 127.0.0.1:port")
+		if !c.AllowRemote || c.WebhookToken == "" {
+			return Config{}, fmt.Errorf("remote binding requires KUBESCALE_ALLOW_REMOTE=true and KUBESCALE_WEBHOOK_TOKEN")
+		}
 	}
 	if c.ControllerInterval <= 0 || c.MetricMaxAge <= 0 || c.QueryTimeout <= 0 {
 		return Config{}, fmt.Errorf("interval and timeout values must be positive")

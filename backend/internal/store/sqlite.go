@@ -32,6 +32,8 @@ func Open(path string) (*SQLite, error) {
 	for _, statement := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA busy_timeout=5000",
+		`CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY,namespace TEXT NOT NULL,workload TEXT NOT NULL,status TEXT NOT NULL,severity TEXT NOT NULL,starts_at TEXT NOT NULL,document TEXT NOT NULL)`,
+		"CREATE INDEX IF NOT EXISTS alerts_scope ON alerts(namespace,workload,status)",
 		`CREATE TABLE IF NOT EXISTS policies (
 			id TEXT PRIMARY KEY, namespace TEXT NOT NULL, workload TEXT NOT NULL,
 			status TEXT NOT NULL, version INTEGER NOT NULL, document TEXT NOT NULL,

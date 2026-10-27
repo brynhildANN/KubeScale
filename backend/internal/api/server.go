@@ -34,7 +34,7 @@ type Server struct {
 	Logger     *slog.Logger
 }
 
-// Router 注册业务、健康检查和控制器指标路由；告警列表当前仅返回空分页。
+// Router 注册业务、健康检查和控制器指标路由；包含告警查询和受保护的 Webhook。
 func (s *Server) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -60,9 +60,10 @@ func (s *Server) Router() *gin.Engine {
 	v1.POST("/policies/validate-metric", s.validateMetric)
 	v1.GET("/operations", s.operations)
 	v1.GET("/operations/:id", s.operation)
-	v1.GET("/alerts", func(c *gin.Context) {
-		c.JSON(http.StatusOK, model.Page[any]{Items: []any{}, Total: 0, Page: 1, PageSize: 20})
-	})
+	v1.GET("/alerts", s.alerts)
+	v1.GET("/alerts/summary", s.alertSummary)
+	v1.GET("/alerts/:id", s.alert)
+	v1.POST("/webhooks/alertmanager", s.alertWebhook)
 	return r
 }
 
@@ -398,6 +399,17 @@ func (s *Server) overview(c *gin.Context) {
 	if len(recent) > 4 {
 		recent = recent[:4]
 	}
+	alertItems, err := s.Store.Alerts(c.Request.Context())
+	if err != nil {
+		fail(c, 500, "STORE_ERROR", err.Error())
+		return
+	}
+	activeAlerts := 0
+	for _, a := range alertItems {
+		if s.allowed(a.Namespace) && a.Status == "firing" && (c.Query("namespace") == "" || a.Namespace == c.Query("namespace")) {
+			activeAlerts++
+		}
+	}
 	c.JSON(200, gin.H{"clusterHealth": health, "managedWorkloads": managed, "podCount": pods, "enabledPolicies": enabled,
-		"scalingActions24h": actions, "activeAlerts": 0, "observedAt": time.Now().UTC(), "attentionWorkloads": attention, "recentOperations": recent})
+		"scalingActions24h": actions, "activeAlerts": activeAlerts, "observedAt": time.Now().UTC(), "attentionWorkloads": attention, "recentOperations": recent})
 }
