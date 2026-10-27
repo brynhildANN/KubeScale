@@ -16,8 +16,9 @@
 | `frontend/src/stores/`、`router/`、`types.ts` | UI 状态、路由与业务类型 |
 | `deploy/rbac/`、`deploy/monitoring/` | RBAC 与 ServiceMonitor 样例 |
 | `examples/demo-app/` | 演示应用镜像与 Kubernetes 清单 |
-| `tests/load/k6/` | 负载脚本 |
-| `scripts/` | `dev.sh` 本地启动入口，以及环境验收、控制台验证与演示脚本 |
+| `tests/e2e/` | 共享验收工具、CPU/RPS 伸缩、控制权冲突与浏览器流程 |
+| `tests/load/k6/` | 独立 HTTP 负载脚本 |
+| `scripts/` | `dev.sh` 本地启动入口 |
 | `docs/` | 项目架构、接口、指标和代码说明 |
 
-Go 单元测试与前端测试随源码维护。部分部署和验证脚本文件名保留历史 phase 前缀；运行前应检查其环境参数和修改集群的行为。依赖、数据库、构建产物及原始验收输出不提交。
+Go 单元测试与前端测试随源码维护。集群验收与负载脚本的配置、运行方式和资源清理边界见[测试与验收](../tests/README.md)。依赖、数据库、构建产物及原始验收输出不提交。

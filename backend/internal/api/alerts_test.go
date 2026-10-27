@@ -11,7 +11,7 @@ import (
 )
 
 func TestAlertLifecycle(t *testing.T) {
-	s, _ := phase2Server(t)
+	s, _ := newTestServer(t)
 	s.Config.WebhookToken = "test-token"
 	r := s.Router()
 	post := func(payload any, token string, want int) {

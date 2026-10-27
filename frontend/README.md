@@ -47,3 +47,5 @@ pnpm build
 ## 代码约定
 
 `pnpm format` 格式化 src，ESLint 检查代码。页面按依赖、状态、派生数据、方法、监听和生命周期组织；复杂展示提取到计算属性或组件。告警详情在 `components/alerts/`，操作表格、时间线和抽屉在 `components/operations/`；公共逻辑有明确复用需求时再提取。
+
+浏览器端到端验收见[测试与验收](../tests/README.md#浏览器控制台流程)，脚本位于 `tests/e2e/console.cjs`。

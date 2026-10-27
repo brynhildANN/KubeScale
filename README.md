@@ -36,4 +36,4 @@ cp backend/.env.example backend/.env.local  # 首次配置，按环境修改
 | [指标口径](docs/metrics.md) | 单位、计算、质量与图表限制 |
 | [目录说明](docs/project-structure.md) | 源码、部署和验证资源 |
 
-技术栈：Go、Gin、client-go、SQLite、Prometheus；Vue 3、TypeScript、Vite、Element Plus、ECharts、Pinia。演示应用在 `examples/demo-app`，负载与验收脚本在 `tests/`、`scripts/`。依赖、构建产物、本地环境变量、数据库、日志和 `tests/results/` 不提交。
+技术栈：Go、Gin、client-go、SQLite、Prometheus；Vue 3、TypeScript、Vite、Element Plus、ECharts、Pinia。演示应用在 `examples/demo-app`，负载与验收脚本统一在 `tests/`，运行方式见[测试与验收](tests/README.md)。依赖、构建产物、本地环境变量、数据库、日志和 `tests/results/` 不提交。

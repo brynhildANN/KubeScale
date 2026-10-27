@@ -42,4 +42,4 @@ go vet ./...
 go run ./cmd/demo-app
 ```
 
-演示镜像和 Kubernetes 资源见 [examples/demo-app](../examples/demo-app)，RBAC 见 [deploy/rbac](../deploy/rbac)，负载脚本见 [tests/load/k6](../tests/load/k6)。`scripts/` 中的验收与演示脚本可能创建策略、调整副本或修改 Service，运行前检查参数。决策保护、重启恢复和实际副本语义见[架构](../docs/architecture.md)。
+演示镜像和 Kubernetes 资源见 [examples/demo-app](../examples/demo-app)，RBAC 见 [deploy/rbac](../deploy/rbac)，负载脚本见 [tests/load/k6](../tests/load/k6)。集群与浏览器验收统一在 `tests/e2e/`，会创建测试策略、调整副本或临时创建 HPA，运行方式和清理边界见[测试与验收](../tests/README.md)。决策保护、重启恢复和实际副本语义见[架构](../docs/architecture.md)。
