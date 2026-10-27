@@ -30,6 +30,9 @@ export function validatePolicyDraft(
   )
     return '连续周期至少为 1'
   if (
+    !Number.isInteger(draft.cooldownSeconds) ||
+    !Number.isInteger(draft.stabilizationSeconds) ||
+    !Number.isInteger(draft.samplingIntervalSeconds) ||
     draft.cooldownSeconds < 0 ||
     draft.stabilizationSeconds < 0 ||
     draft.samplingIntervalSeconds < 1

@@ -52,3 +52,34 @@ func TestPolicyVersionAndOperationPersistence(t *testing.T) {
 		t.Fatalf("24h scale actions = %d, %v", count, err)
 	}
 }
+
+// TestDecisionSnapshotSurvivesRestart 验证配置快照、采样时间与冷却记录重开数据库后仍可读取。
+func TestDecisionSnapshotSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "restart.db")
+	repo, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	policy := model.Policy{ID: "p1", Version: 3, TargetValue: .7}
+	op := model.Operation{ID: "snapshot", Namespace: "demo", WorkloadName: "api", Type: "自动扩容", Status: "succeeded", CreatedAt: now, Policy: &policy, MetricSampledAt: &now}
+	if err := repo.InsertOperation(context.Background(), op); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repo, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	saved, err := repo.GetOperation(context.Background(), op.ID)
+	if err != nil || saved.Policy == nil || saved.Policy.Version != 3 || saved.Policy.TargetValue != .7 || saved.MetricSampledAt == nil || !saved.MetricSampledAt.Equal(now) {
+		t.Fatalf("operation=%+v err=%v", saved, err)
+	}
+	last, err := repo.LastSuccessfulScale(context.Background(), "demo", "api")
+	if err != nil || last == nil || !last.Equal(now) {
+		t.Fatalf("last=%v err=%v", last, err)
+	}
+}

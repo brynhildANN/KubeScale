@@ -51,7 +51,14 @@ async function open(row: Operation) {
 }
 
 onMounted(load)
-watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
+watch(() => [ui.refreshKey, page.value], load)
+watch(
+  () => [ui.namespace, status.value],
+  () => {
+    if (page.value === 1) void load()
+    else page.value = 1
+  },
+)
 </script>
 
 <template>
@@ -59,7 +66,7 @@ watch(() => [ui.namespace, ui.refreshKey, status.value, page.value], load)
     <div>
       <div class="eyebrow">DECISION HISTORY</div>
       <h1>操作记录</h1>
-      <p>追踪每次伸缩、跳过决策和策略变更</p>
+      <p>追踪每次伸缩、跳过决策和失败原因</p>
     </div>
     <el-radio-group
       v-model="view"

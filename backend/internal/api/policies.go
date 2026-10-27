@@ -21,6 +21,18 @@ func (s *Server) policies(c *gin.Context) {
 		fail(c, 500, "STORE_ERROR", err.Error())
 		return
 	}
+	namespace := c.Query("namespace")
+	if namespace != "" && !s.allowed(namespace) {
+		fail(c, 403, "NAMESPACE_FORBIDDEN", "namespace is not managed")
+		return
+	}
+	filtered := make([]model.Policy, 0, len(items))
+	for _, item := range items {
+		if s.allowed(item.Namespace) && (namespace == "" || item.Namespace == namespace) {
+			filtered = append(filtered, item)
+		}
+	}
+	items = filtered
 	page, size := pagination(c)
 	c.JSON(200, pageOf(items, page, size))
 }

@@ -8,7 +8,7 @@ export const useUiStore = defineStore('ui', () => {
   const dark = ref(localStorage.getItem('kubescale-theme') === 'dark')
   const range = ref(localStorage.getItem('kubescale-range') || '1h')
   const refreshKey = ref(0)
-  const liveStatus = ref<'mock' | 'connecting' | 'connected' | 'disconnected'>('mock')
+  const liveStatus = ref<'mock' | 'polling' | 'connecting' | 'connected' | 'disconnected'>('mock')
   const lastEventId = ref('')
   const seen = new Set<string>()
   let source: EventSource | null = null
@@ -48,7 +48,7 @@ export const useUiStore = defineStore('ui', () => {
   function connect() {
     if (import.meta.env.VITE_USE_MOCK !== 'false' || source) return
     if (import.meta.env.VITE_ENABLE_SSE !== 'true') {
-      liveStatus.value = 'disconnected'
+      liveStatus.value = 'polling'
       if (!pollTimer) pollTimer = setInterval(refresh, 30000)
       return
     }

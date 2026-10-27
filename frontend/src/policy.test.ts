@@ -28,4 +28,13 @@ describe('策略校验', () => {
     expect(validatePolicyDraft(draft, 'hpa')).toContain('控制者')
     expect(validatePolicyDraft({ ...draft, targetValue: 1.2 }, 'unmanaged')).toContain('目标值')
   })
+  it('拒绝非整数或非有限时间参数', () => {
+    expect(validatePolicyDraft({ ...draft, cooldownSeconds: NaN }, 'unmanaged')).toContain('时间')
+    expect(validatePolicyDraft({ ...draft, stabilizationSeconds: 1.5 }, 'unmanaged')).toContain(
+      '时间',
+    )
+    expect(
+      validatePolicyDraft({ ...draft, samplingIntervalSeconds: Infinity }, 'unmanaged'),
+    ).toContain('时间')
+  })
 })

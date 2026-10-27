@@ -11,7 +11,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import type { MetricSeries, Operation } from '@/types'
-import { formatUnit } from '@/utils'
+import { formatNumber, formatUnit } from '@/utils'
 
 const props = defineProps<{
   title: string
@@ -19,6 +19,7 @@ const props = defineProps<{
   operations?: Operation[]
   height?: number
   step?: boolean
+  targetValue?: number
 }>()
 echarts.use([
   LineChart,
@@ -49,7 +50,11 @@ function render() {
   chart ||= echarts.init(el.value)
   const unit = props.series[0]?.unit ?? 'count'
   const marks = (props.operations ?? [])
-    .filter((o) => o.type.includes('扩容') || o.type.includes('缩容') || o.type.includes('手动'))
+    .filter(
+      (o) =>
+        o.status === 'succeeded' &&
+        (o.type.includes('扩容') || o.type.includes('缩容') || o.type.includes('手动')),
+    )
     .map((o) => ({
       xAxis: o.createdAt,
       name: o.type,
@@ -60,6 +65,22 @@ function render() {
         width: 1,
       },
     }))
+  const target =
+    props.targetValue == null
+      ? []
+      : [
+          {
+            yAxis: props.targetValue,
+            name: unit === 'rps' ? '当前目标 × 当前期望副本' : '当前策略目标',
+            label: {
+              show: true,
+              position: 'insideEndTop' as const,
+              formatter: `目标 ${formatUnit(props.targetValue, unit)}`,
+            },
+            lineStyle: { color: '#e69b3d', type: 'dashed' as const },
+          },
+        ]
+  chart.resize()
   chart.setOption(
     {
       animationDuration: 250,
@@ -81,11 +102,15 @@ function render() {
       yAxis: {
         type: 'value',
         min: 0,
+        max:
+          props.targetValue == null
+            ? undefined
+            : (extent: { max: number }) => Math.max(extent.max, props.targetValue ?? 0) * 1.1,
         axisLabel: {
           color: '#8391a7',
           formatter: (v: number) =>
             unit === 'ratio'
-              ? `${Math.round(v * 100)}%`
+              ? `${formatNumber(v * 100, 2)}%`
               : unit === 'byte'
                 ? `${Math.round(v / 1048576)}`
                 : unit === 'second'
@@ -104,15 +129,14 @@ function render() {
         lineStyle: { width: 2.5 },
         areaStyle: i === 0 ? { opacity: 0.06 } : undefined,
         data: s.points.map((p) => [p.timestamp, p.value]),
-        markLine:
-          i === 0 && marks.length ? { silent: true, symbol: 'none', data: marks } : undefined,
+        markLine: i === 0 ? { symbol: 'none', data: [...marks, ...target] } : undefined,
       })),
     },
     true,
   )
 }
 watch(
-  () => [props.series, props.operations],
+  () => [props.series, props.operations, props.targetValue],
   () => requestAnimationFrame(render),
   { deep: true },
 )
@@ -133,7 +157,9 @@ onBeforeUnmount(() => {
   <section class="card chart-card">
     <div class="card-header">
       <h3>{{ title }}</h3>
-      <span class="muted">按本地时区显示</span>
+      <span class="muted">
+        {{ targetValue == null ? '按本地时区显示' : '目标线使用当前配置；历史参数见决策详情' }}
+      </span>
     </div>
     <div
       v-if="!hasData"

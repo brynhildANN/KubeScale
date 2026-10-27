@@ -88,6 +88,8 @@ export interface Check {
   reason: string
 }
 export interface Operation {
+  policy?: Policy
+  metricSampledAt?: string
   id: string
   type: string
   status: OperationStatus

@@ -62,6 +62,9 @@ type Operation struct {
 	Source       string   `json:"source"`
 	MetricID     *string  `json:"metricId"`
 	MetricValue  *float64 `json:"metricValue"`
+	// 保存决策时的配置与采样时间，策略修改或删除后仍可核对历史。
+	Policy          *Policy    `json:"policy,omitempty"`
+	MetricSampledAt *time.Time `json:"metricSampledAt,omitempty"`
 	// CPU 为利用率比例，RPS 为单副本目标请求数。
 	TargetValue *float64 `json:"targetValue"`
 	OldReplicas *int32   `json:"oldReplicas"`

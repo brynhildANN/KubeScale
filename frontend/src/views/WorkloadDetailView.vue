@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api'
 import MetricChart from '@/components/MetricChart.vue'
 import StatePanel from '@/components/StatePanel.vue'
+import OperationDetailDrawer from '@/components/operations/OperationDetailDrawer.vue'
 import { useUiStore } from '@/stores/ui'
 import type { Operation, Page, Pod, Policy, SeriesResponse, Workload } from '@/types'
 import { formatMetric, formatTime, healthLabels, sourceLabels, statusLabels } from '@/utils'
@@ -28,6 +29,8 @@ const tab = ref('overview'),
   scaleOpen = ref(false),
   scaleCount = ref(1),
   scaling = ref(false)
+const decision = ref<Operation | null>(null)
+const decisionOpen = ref(false)
 const customRange = ref<[Date, Date] | null>(null)
 const timeRanges = [
   ['15m', '15 分钟'],
@@ -60,9 +63,8 @@ async function load() {
       ui.range === 'custom' && customRange.value
         ? customRange.value[0]
         : new Date(to.getTime() - duration)
-    const [w, p, ev, ps, s] = await Promise.all([
+    const [w, ev, ps, s] = await Promise.all([
       api.workload(namespace, name),
-      api.policies(),
       api.workloadEvents(namespace, name),
       api.pods(namespace, name),
       api.series(
@@ -82,7 +84,7 @@ async function load() {
       ),
     ])
     workload.value = w
-    policy.value = p.items.find((item) => item.id === w.policyId) ?? null
+    policy.value = w.policyId ? await api.policy(w.policyId) : null
     events.value = ev
     pods.value = ps
     series.value = s
@@ -95,6 +97,10 @@ async function load() {
 onMounted(load)
 watch(() => [ui.refreshKey, ui.range, customRange.value], load)
 // 按指标 ID 提取曲线，未加载时返回空数组。
+function openDecision(event: Operation) {
+  decision.value = event
+  decisionOpen.value = true
+}
 function metric(id: string) {
   return series.value?.series.filter((s) => s.metricId === id) ?? []
 }
@@ -278,9 +284,17 @@ async function togglePause() {
                 title="CPU 利用率"
                 :series="metric('cpu_utilization')"
                 :operations="events?.items"
+                :target-value="
+                  policy?.metric === 'cpu_utilization' ? policy.targetValue : undefined
+                "
               />
               <MetricChart
                 title="每秒请求数"
+                :target-value="
+                  policy?.metric === 'rps'
+                    ? policy.targetValue * workload.desiredReplicas
+                    : undefined
+                "
                 :series="metric('rps')"
                 :operations="events?.items"
               />
@@ -321,6 +335,7 @@ async function togglePause() {
           <div class="tab-content chart-grid">
             <MetricChart
               title="CPU 利用率"
+              :target-value="policy?.metric === 'cpu_utilization' ? policy.targetValue : undefined"
               :series="metric('cpu_utilization')"
               :operations="events?.items"
             />
@@ -330,6 +345,9 @@ async function togglePause() {
             />
             <MetricChart
               title="每秒请求数"
+              :target-value="
+                policy?.metric === 'rps' ? policy.targetValue * workload.desiredReplicas : undefined
+              "
               :series="metric('rps')"
               :operations="events?.items"
             />
@@ -422,6 +440,13 @@ async function togglePause() {
                     }}
                   </p>
                   <small>{{ formatTime(event.createdAt) }}</small>
+                  <el-button
+                    link
+                    type="primary"
+                    @click="openDecision(event)"
+                  >
+                    查看决策详情
+                  </el-button>
                 </div>
                 <div
                   v-if="!events?.items.length"
@@ -513,6 +538,13 @@ async function togglePause() {
                   }}
                 </p>
                 <small>{{ formatTime(event.createdAt) }} · {{ event.source }}</small>
+                <el-button
+                  link
+                  type="primary"
+                  @click="openDecision(event)"
+                >
+                  查看决策详情
+                </el-button>
               </div>
               <div
                 v-if="!events?.items.length"
@@ -532,8 +564,8 @@ async function togglePause() {
         <p class="muted">当前 {{ workload.desiredReplicas }} 个副本。调整后会产生一条操作记录。</p>
         <el-input-number
           v-model="scaleCount"
-          :min="1"
-          :max="100"
+          :min="policy?.minReplicas ?? 1"
+          :max="policy?.maxReplicas ?? 1000"
           style="width: 100%"
         />
         <template #footer>
@@ -547,6 +579,10 @@ async function togglePause() {
           </el-button>
         </template>
       </el-dialog>
+      <OperationDetailDrawer
+        v-model="decisionOpen"
+        :detail="decision"
+      />
       <el-drawer
         v-model="podDrawer"
         title="Pod 详情"

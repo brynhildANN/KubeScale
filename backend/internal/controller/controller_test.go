@@ -19,10 +19,16 @@ import (
 	"kubescale/backend/internal/model"
 )
 
-type fakeStore struct{ operations []model.Operation }
+type fakeStore struct {
+	operations []model.Operation
+	policies   []model.Policy
+	lastScale  *time.Time
+}
 
 // ListPolicies 按可选状态筛选策略，并按命名空间和工作负载排序。
-func (f *fakeStore) ListPolicies(context.Context, string) ([]model.Policy, error) { return nil, nil }
+func (f *fakeStore) ListPolicies(context.Context, string) ([]model.Policy, error) {
+	return f.policies, nil
+}
 
 // InsertOperation 保存一次决策或手动伸缩记录，将空检查列表统一写为空数组。
 func (f *fakeStore) InsertOperation(_ context.Context, op model.Operation) error {
@@ -32,20 +38,30 @@ func (f *fakeStore) InsertOperation(_ context.Context, op model.Operation) error
 
 // LastSuccessfulScale 读取最近一次成功的自动或手动伸缩创建时间，用于冷却检查。
 func (f *fakeStore) LastSuccessfulScale(context.Context, string, string) (*time.Time, error) {
-	return nil, nil
+	return f.lastScale, nil
 }
 
 type fakeCluster struct {
 	replicas  int32
 	writes    int
 	updateErr error
+	hpa       bool
+	notReady  bool
+	rolling   bool
 }
 
 // Deployment 读取指定 Deployment 的当前状态。
 func (f *fakeCluster) Deployment(context.Context, string, string) (*appsv1.Deployment, error) {
-	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "demo", Generation: 1},
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "demo", Generation: 1},
 		Spec:   appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}},
-		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: f.replicas, ReadyReplicas: f.replicas}}, nil
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: f.replicas, ReadyReplicas: f.replicas}}
+	if f.notReady {
+		d.Status.ReadyReplicas--
+	}
+	if f.rolling {
+		d.Generation++
+	}
+	return d, nil
 }
 
 // Pods 使用 Deployment 的完整标签选择器查询关联 Pod。
@@ -75,7 +91,7 @@ func (f *fakeCluster) UpdateScale(_ context.Context, scale *autoscalingv1.Scale)
 }
 
 // HasHPA 检查是否存在指向该 Deployment 的 HPA，避免多个控制器同时调节副本。
-func (f *fakeCluster) HasHPA(context.Context, string, string) (bool, error) { return false, nil }
+func (f *fakeCluster) HasHPA(context.Context, string, string) (bool, error) { return f.hpa, nil }
 
 type fakeMetrics struct {
 	value float64
@@ -135,5 +151,166 @@ func TestScaleConflictRecordedAsFailure(t *testing.T) {
 	}
 	if len(repo.operations) != 1 || repo.operations[0].Status != "failed" {
 		t.Fatalf("operations=%+v", repo.operations)
+	}
+}
+
+// TestSafetyGuardsNeverWrite 验证发布、未就绪与 HPA 冲突时保持副本并记录原因。
+func TestSafetyGuardsNeverWrite(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		cluster fakeCluster
+		code    string
+	}{
+		{"not ready", fakeCluster{replicas: 2, notReady: true}, "WORKLOAD_NOT_READY"},
+		{"rolling", fakeCluster{replicas: 2, rolling: true}, "WORKLOAD_NOT_READY"},
+		{"HPA", fakeCluster{replicas: 2, hpa: true}, "CONTROL_CONFLICT"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeStore{}
+			c := New(repo, &tt.cluster, fakeMetrics{value: .9}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err := c.Reconcile(context.Background(), testPolicy()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.cluster.writes != 0 || len(repo.operations) != 1 || *repo.operations[0].ErrorCode != tt.code {
+				t.Fatalf("writes=%d operations=%+v", tt.cluster.writes, repo.operations)
+			}
+		})
+	}
+}
+
+// TestConsecutivePeriodsReset 验证无效指标、方向变化及配置版本变更均打断连续触发。
+func TestConsecutivePeriodsReset(t *testing.T) {
+	for _, interrupt := range []string{"missing", "direction", "version", "no change"} {
+		t.Run(interrupt, func(t *testing.T) {
+			repo := &fakeStore{}
+			cluster := &fakeCluster{replicas: 2}
+			c := New(repo, cluster, fakeMetrics{value: .9}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			p := testPolicy()
+			p.ScaleUpConsecutivePeriods = 2
+			p.ScaleDownConsecutivePeriods = 2
+			run := func() {
+				t.Helper()
+				if err := c.Reconcile(context.Background(), p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run()
+			switch interrupt {
+			case "missing":
+				c.Metrics = fakeMetrics{err: metrics.ErrUnavailable}
+				run()
+			case "direction":
+				c.Metrics = fakeMetrics{value: .1}
+				run()
+			case "version":
+				p.Version++
+			case "no change":
+				c.Metrics = fakeMetrics{value: .5}
+				run()
+			}
+			c.Metrics = fakeMetrics{value: .9}
+			run()
+			if cluster.writes != 0 {
+				t.Fatal("interrupted streak caused scale")
+			}
+			run()
+			if cluster.writes != 1 || cluster.replicas != 4 {
+				t.Fatalf("writes=%d replicas=%d", cluster.writes, cluster.replicas)
+			}
+		})
+	}
+}
+
+// TestStabilizationIncludesAllRecommendations 验证首次等待、无变化建议及窗口到期后的缩容。
+func TestStabilizationIncludesAllRecommendations(t *testing.T) {
+	repo := &fakeStore{}
+	cluster := &fakeCluster{replicas: 4}
+	c := New(repo, cluster, fakeMetrics{value: .1}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	now := time.Now()
+	c.now = func() time.Time { return now }
+	p := testPolicy()
+	p.StabilizationSeconds = 60
+	run := func() {
+		t.Helper()
+		if err := c.Reconcile(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run()
+	if cluster.writes != 0 || *repo.operations[0].ErrorCode != "STABILIZATION" {
+		t.Fatal("first downscale did not wait")
+	}
+	now = now.Add(30 * time.Second)
+	c.Metrics = fakeMetrics{value: .5}
+	run()
+	now = now.Add(31 * time.Second)
+	c.Metrics = fakeMetrics{value: .1}
+	run()
+	if cluster.writes != 0 {
+		t.Fatal("no-change recommendation missing from window")
+	}
+	now = now.Add(30 * time.Second)
+	run()
+	if cluster.writes != 1 || cluster.replicas != 1 {
+		t.Fatalf("writes=%d replicas=%d", cluster.writes, cluster.replicas)
+	}
+	op := repo.operations[len(repo.operations)-1]
+	if *op.CandidateReplicas != 1 || *op.DesiredReplicas != 1 || *op.ActualReplicas != 1 {
+		t.Fatalf("operation=%+v", op)
+	}
+}
+
+// TestRestartRestoresCooldown 验证新控制器仍读取持久化冷却时间，并在期满后允许伸缩。
+func TestRestartRestoresCooldown(t *testing.T) {
+	now := time.Now()
+	repo := &fakeStore{lastScale: &now}
+	cluster := &fakeCluster{replicas: 2}
+	p := testPolicy()
+	p.CooldownSeconds = 60
+	for i := 0; i < 2; i++ {
+		c := New(repo, cluster, fakeMetrics{value: .9}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		c.now = func() time.Time { return now.Add(time.Duration(i) * 61 * time.Second) }
+		if err := c.Reconcile(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 && (cluster.writes != 0 || *repo.operations[0].ErrorCode != "COOLDOWN") {
+			t.Fatal("restart bypassed cooldown")
+		}
+	}
+	if cluster.writes != 1 {
+		t.Fatalf("writes=%d", cluster.writes)
+	}
+}
+
+// TestPauseAndRestartResetState 验证停用策略不执行，暂停清理与重启后重新等待。
+func TestPauseAndRestartResetState(t *testing.T) {
+	repo := &fakeStore{}
+	cluster := &fakeCluster{replicas: 4}
+	p := testPolicy()
+	p.ScaleDownConsecutivePeriods = 2
+	p.StabilizationSeconds = 60
+	c := New(repo, cluster, fakeMetrics{value: .1}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := c.Reconcile(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	c.ReconcileAll(context.Background())
+	if len(c.streaks) != 0 || len(c.recommendations) != 0 || len(c.versions) != 0 {
+		t.Fatal("paused policy state retained")
+	}
+	p.Status = "paused"
+	if err := c.Reconcile(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.operations) != 1 {
+		t.Fatal("paused policy evaluated")
+	}
+	p.Status = "enabled"
+	p.ScaleDownConsecutivePeriods = 1
+	c = New(repo, cluster, fakeMetrics{value: .1}, time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := c.Reconcile(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.writes != 0 || *repo.operations[1].ErrorCode != "STABILIZATION" {
+		t.Fatal("restart bypassed stabilization")
 	}
 }

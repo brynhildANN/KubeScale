@@ -71,6 +71,8 @@ type Controller struct {
 	streaks           map[string]streak
 	recommendations   map[string][]recommendation
 	lastRun           map[string]time.Time
+	versions          map[string]int
+	now               func() time.Time
 	heartbeat         time.Time
 }
 
@@ -79,6 +81,7 @@ func New(store Repository, cluster Cluster, source MetricSource, interval time.D
 	registry := prometheus.NewRegistry()
 	c := &Controller{Store: store, Kube: cluster, Metrics: source, Interval: interval, Logger: logger, Registry: registry,
 		streaks: make(map[string]streak), recommendations: make(map[string][]recommendation), lastRun: make(map[string]time.Time),
+		versions: make(map[string]int), now: time.Now,
 		reconcileTotal:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "kubescale_reconcile_total", Help: "Controller reconciliation attempts."}, []string{"namespace", "workload", "status"}),
 		reconcileErrors:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "kubescale_reconcile_errors_total", Help: "Controller reconciliation errors."}, []string{"namespace", "workload"}),
 		scalingActions:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "kubescale_scaling_actions_total", Help: "Successful scale writes."}, []string{"namespace", "workload", "action"}),
@@ -118,6 +121,21 @@ func (c *Controller) ReconcileAll(ctx context.Context) {
 		c.Logger.Error("list enabled policies", "error", err)
 		return
 	}
+	// 暂停或删除后清理内存状态，恢复时重新累计连续周期和稳定窗口。
+	active := make(map[string]bool, len(policies))
+	for _, policy := range policies {
+		active[policy.ID] = true
+	}
+	c.mu.Lock()
+	for id := range c.versions {
+		if !active[id] {
+			delete(c.versions, id)
+			delete(c.streaks, id)
+			delete(c.recommendations, id)
+			delete(c.lastRun, id)
+		}
+	}
+	c.mu.Unlock()
 	for _, policy := range policies {
 		if ctx.Err() != nil {
 			return
@@ -141,9 +159,21 @@ func (c *Controller) Heartbeat() time.Time { c.mu.Lock(); defer c.mu.Unlock(); r
 
 // Reconcile 执行单条策略的完整伸缩流程，将成功、失败或跳过原因保存为操作记录。
 func (c *Controller) Reconcile(ctx context.Context, policy model.Policy) error {
+	if policy.Status != "enabled" {
+		return nil
+	}
+	// 策略每次修改或启停都会递增版本，旧配置的触发次数不能用于新配置。
+	c.mu.Lock()
+	if version, ok := c.versions[policy.ID]; !ok || version != policy.Version {
+		delete(c.streaks, policy.ID)
+		delete(c.recommendations, policy.ID)
+		c.versions[policy.ID] = policy.Version
+	}
+	c.mu.Unlock()
 	started := time.Now()
 	defer func() { c.reconcileDuration.Observe(time.Since(started).Seconds()) }()
 	op := model.Operation{ID: newID(), Namespace: policy.Namespace, WorkloadName: policy.WorkloadName, Source: "KubeScale", MetricID: model.Ptr(policy.Metric), TargetValue: model.Ptr(policy.TargetValue), Checks: []model.Check{}, CreatedAt: started.UTC()}
+	op.Policy = &policy
 	// 统一保存决策结果：跳过也要记录原因，便于前端追踪为何未伸缩。
 	finish := func(status, code, reason string) error {
 		op.Status = status
@@ -232,6 +262,7 @@ func (c *Controller) Reconcile(ctx context.Context, policy model.Policy) error {
 		return finish("skipped", "METRIC_UNAVAILABLE", err.Error())
 	}
 	op.MetricValue = model.Ptr(value)
+	op.MetricSampledAt = model.Ptr(sampledAt.UTC())
 	op.Checks = append(op.Checks, model.Check{Code: "metric_fresh", Passed: true, Reason: fmt.Sprintf("采样时间 %s", sampledAt.Format(time.RFC3339))})
 	candidate, err := decision.Desired(current, value, policy)
 	if err != nil {
@@ -239,6 +270,8 @@ func (c *Controller) Reconcile(ctx context.Context, policy model.Policy) error {
 	}
 	op.CandidateReplicas = model.Ptr(candidate)
 	op.DesiredReplicas = model.Ptr(candidate)
+	// 所有有效建议均进入窗口，首次观测以当前副本兜底，重启后保守等待。
+	stable := c.stabilized(policy.ID, candidate, current, time.Duration(policy.StabilizationSeconds)*time.Second)
 	c.desiredReplicas.WithLabelValues(policy.Namespace, policy.WorkloadName).Set(float64(candidate))
 	if candidate == current {
 		c.resetStreak(policy.ID)
@@ -259,7 +292,7 @@ func (c *Controller) Reconcile(ctx context.Context, policy model.Policy) error {
 		return finish("skipped", "CONSECUTIVE_PERIODS", fmt.Sprintf("连续命中 %d/%d 次", count, needed))
 	}
 	if direction < 0 {
-		candidate = c.stabilized(policy.ID, candidate, time.Duration(policy.StabilizationSeconds)*time.Second)
+		candidate = stable
 		op.DesiredReplicas = model.Ptr(candidate)
 		if candidate >= current {
 			return finish("skipped", "STABILIZATION", "缩容稳定窗口仍包含较高副本建议")
@@ -269,7 +302,7 @@ func (c *Controller) Reconcile(ctx context.Context, policy model.Policy) error {
 	if err != nil {
 		return finish("failed", "HISTORY_READ_FAILED", err.Error())
 	}
-	if last != nil && time.Since(*last) < time.Duration(policy.CooldownSeconds)*time.Second {
+	if last != nil && c.now().Sub(*last) < time.Duration(policy.CooldownSeconds)*time.Second {
 		return finish("skipped", "COOLDOWN", "仍处于伸缩冷却期")
 	}
 	op.Checks = append(op.Checks, model.Check{Code: "safety", Passed: true, Reason: "连续触发、稳定窗口和冷却期检查通过"})
@@ -319,15 +352,18 @@ func (c *Controller) addStreak(id string, direction int) int {
 // resetStreak 清除指定策略的连续触发计数。
 func (c *Controller) resetStreak(id string) { c.mu.Lock(); delete(c.streaks, id); c.mu.Unlock() }
 
-// stabilized 保存本次缩容建议并取窗口内已保存建议的最大值，减缓副本下降。
-func (c *Controller) stabilized(id string, candidate int32, window time.Duration) int32 {
+// stabilized 保存所有有效建议并取窗口内最大值；首次观测以当前副本初始化。
+func (c *Controller) stabilized(id string, candidate, current int32, window time.Duration) int32 {
 	if window <= 0 {
 		return candidate
 	}
-	now := time.Now()
+	now := c.now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	items := []recommendation{{at: now, replicas: candidate}}
+	if _, ok := c.recommendations[id]; !ok {
+		items = append(items, recommendation{at: now, replicas: current})
+	}
 	for _, item := range c.recommendations[id] {
 		if now.Sub(item.at) <= window {
 			items = append(items, item)

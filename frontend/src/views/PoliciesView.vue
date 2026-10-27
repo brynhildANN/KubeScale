@@ -14,6 +14,7 @@ const ui = useUiStore(),
   error = ref(''),
   data = ref<Page<Policy> | null>(null),
   workloads = ref<Workload[]>([])
+const page = ref(1)
 const dialog = ref(false),
   step = ref(0),
   editing = ref<Policy | null>(null),
@@ -45,9 +46,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [p, w] = await Promise.all([api.policies(), api.workloads({ pageSize: 100 })])
+    const [p, w] = await Promise.all([
+      api.policies({ namespace: ui.namespace || undefined, page: page.value, pageSize: 20 }),
+      api.workloads({ pageSize: 100 }),
+    ])
     data.value = p
-    workloads.value = w.items
+    const candidates = [...w.items]
+    for (let next = 2; candidates.length < w.total; next++) {
+      const batch = await api.workloads({ page: next, pageSize: 100 })
+      if (!batch.items.length) break
+      candidates.push(...batch.items)
+    }
+    workloads.value = candidates
   } catch (e) {
     error.value = e instanceof Error ? e.message : '无法获取伸缩策略'
   } finally {
@@ -55,7 +65,14 @@ async function load() {
   }
 }
 onMounted(load)
-watch(() => ui.refreshKey, load)
+watch(() => [ui.refreshKey, page.value], load)
+watch(
+  () => ui.namespace,
+  () => {
+    if (page.value === 1) void load()
+    else page.value = 1
+  },
+)
 // 将已有策略或默认值填入表单，打开创建/编辑向导。
 function open(item?: Policy) {
   editing.value = item ?? null
@@ -175,7 +192,11 @@ async function toggle(item: Policy) {
 // 确认后删除策略，并重新加载列表。
 async function remove(item: Policy) {
   try {
-    await ElMessageBox.confirm(`删除策略「${item.name}」？`, '删除策略', { type: 'warning' })
+    await ElMessageBox.confirm(`删除策略「${item.name}」？`, '删除策略', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
     await api.deletePolicy(item.id)
     ElMessage.success('已删除')
     await load()
@@ -305,6 +326,16 @@ const metricLabel = (p: Policy) =>
           </template>
         </el-table-column>
       </el-table>
+      <div class="table-footer">
+        <el-pagination
+          v-model:current-page="page"
+          small
+          background
+          layout="prev, pager, next"
+          :page-size="20"
+          :total="data?.total || 0"
+        />
+      </div>
     </StatePanel>
   </section>
   <el-dialog

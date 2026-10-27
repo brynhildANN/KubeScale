@@ -2,7 +2,7 @@
 
 KubeScale 是基于 Kubernetes 的多指标 Pod 弹性伸缩与可观测性平台。Prometheus 提供指标，Go 服务执行策略评估并通过 Kubernetes Scale API 调整 Deployment 副本数，Vue 3 控制台展示工作负载、策略、决策记录和告警。
 
-当前仓库已包含阶段一核心伸缩后端、Vue 前端及演示资源。前端默认以 Mock 数据运行；接入真实集群时按[阶段一验收步骤](docs/phase1-implementation.md)配置。
+当前仓库已包含阶段一核心伸缩后端，以及阶段二的安全边界完善、真实控制台流程与回归测试。前端默认以 Mock 数据运行；接入真实集群时按[阶段一验收步骤](docs/phase1-implementation.md)配置。
 
 ## 文档
 
@@ -14,6 +14,8 @@ KubeScale 是基于 Kubernetes 的多指标 Pod 弹性伸缩与可观测性平�
 - [阶段一实现与验收](docs/phase1-implementation.md)：代码范围、启动步骤和验收边界。
 - [代码 Review 指南](docs/code-review-guide.md)：模块职责和关键调用链。
 - [阶段一测试报告](docs/phase1-test-report.md)：历史验收结论与已知边界。
+- [阶段二实现与验收](docs/phase2-implementation.md)：本轮改动、安全语义和复现步骤。
+- [阶段二测试报告](docs/phase2-test-report.md)：自动化测试、浏览器与真实集群验收结果。
 
 ## 代码入口
 

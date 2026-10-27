@@ -183,10 +183,12 @@ func (s *Server) workloadFromDeployment(ctx context.Context, d *appsv1.Deploymen
 	}
 	source := "unmanaged"
 	var policyID *string
+	if policy != nil {
+		policyID = model.Ptr(policy.ID)
+	}
 	if hpa {
 		source = "hpa"
 	} else if policy != nil {
-		policyID = model.Ptr(policy.ID)
 		if policy.Status == "enabled" || policy.Status == "paused" {
 			source = "kubescale"
 		} else {

@@ -15,6 +15,7 @@ import type {
   Workload,
 } from '@/types'
 import * as mock from '@/mock/data'
+import { apiErrorMessage } from '@/api/errors'
 
 // 只有明确设置为 false 才访问后端，其余情况使用本地演示数据。
 export const isMock = import.meta.env.VITE_USE_MOCK !== 'false'
@@ -24,6 +25,11 @@ const http = axios.create({
   timeout: 12000,
   withCredentials: true,
 })
+// 将后端错误码转换为可操作的提示，所有读写请求共用同一处理。
+http.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => Promise.reject(new Error(apiErrorMessage(error))),
+)
 const wait = () => new Promise((resolve) => setTimeout(resolve, 160))
 const result = async <T>(value: T): Promise<T> => {
   await wait()
@@ -103,8 +109,24 @@ export const api = {
           from,
           to,
         }),
-  policies: async (): Promise<Page<Policy>> =>
-    isMock ? result(mock.page(mock.policies)) : get<Page<Policy>>('/policies'),
+  policies: async (
+    query: { namespace?: string; page?: number; pageSize?: number } = {},
+  ): Promise<Page<Policy>> =>
+    isMock
+      ? result(
+          mock.page(
+            mock.policies.filter((p) => !query.namespace || p.namespace === query.namespace),
+            query.page,
+            query.pageSize,
+          ),
+        )
+      : get<Page<Policy>>('/policies', query),
+  policy: async (id: string): Promise<Policy> => {
+    if (!isMock) return get<Policy>(`/policies/${enc(id)}`)
+    const item = mock.policies.find((p) => p.id === id)
+    if (!item) throw new Error('策略不存在')
+    return result(item)
+  },
   createPolicy: async (draft: PolicyDraft): Promise<Policy> =>
     isMock ? result(mock.createPolicy(draft)) : (await http.post<Policy>('/policies', draft)).data,
   updatePolicy: async (id: string, draft: PolicyDraft, version: number): Promise<Policy> => {

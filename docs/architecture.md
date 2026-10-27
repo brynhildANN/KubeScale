@@ -87,7 +87,7 @@ SQLite 计划包含以下表：
 - `scaling_events`：事件 ID、rule_id、action、metric_value、old_replicas、desired_replicas、actual_replicas、reason、status、error_message、created_at。
 - `alert_events`：事件 ID、告警名称、severity、namespace、workload_name、message、status、starts_at、ends_at、created_at。
 
-REST API 规划为 `/api/v1/workloads`、`/api/v1/workloads/{namespace}/{name}`、`/api/v1/policies`、`/api/v1/operations`、`/api/v1/alerts`、`/api/v1/metrics/series`；`/api/v1/events/stream` 提供 SSE，`/api/v1/webhooks/alertmanager` 接收告警。字段、分页与错误约定见 [API 契约草案](api.md)，指标口径见[指标设计](metrics.md)。实现前应以 OpenAPI 固定契约。Webhook 必须配置鉴权或网络访问限制；前端 API 需身份验证与策略写操作授权。
+REST API 规划为 `/api/v1/workloads`、`/api/v1/workloads/{namespace}/{name}`、`/api/v1/policies`、`/api/v1/operations`、`/api/v1/alerts`、`/api/v1/metrics/series`；`/api/v1/events/stream` 提供 SSE，`/api/v1/webhooks/alertmanager` 接收告警。字段、分页与错误约定见 [API 契约草案](api.md)，指标口径见[指标设计](metrics.md)。实现前应以 OpenAPI 固定契约。阶段二通过轮询与手动刷新更新数据，不实现 SSE、身份验证与权限控制；上述 SSE 能力保留为后续设计。Webhook 必须配置鉴权或网络访问限制；前端 API 需身份验证与策略写操作授权。
 
 ## 7. Kubernetes 部署
 

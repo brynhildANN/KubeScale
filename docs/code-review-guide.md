@@ -43,7 +43,7 @@ API 和控制循环在同一个 Go 进程中，复用 SQLite、Kubernetes Client
 | `frontend/src/mock/data.ts` | 独立 Mock 数据源，当前运行未启用。 |
 | `frontend/vite.config.ts` | `/api` 代理到 `http://127.0.0.1:8080`。 |
 
-页面数据流：页面 mounted / 筛选变化 / Pinia refreshKey → API 模块 → Go API → DTO → Vue ref → 表格和 ECharts。后端尚无 SSE，因此“事件流断开”表示使用轮询，不代表 REST 或控制器断开。历史图表依赖 Prometheus，操作记录依赖 SQLite。
+页面数据流：页面 mounted / 筛选变化 / Pinia refreshKey → API 模块 → Go API → DTO → Vue ref → 表格和 ECharts。后端尚无 SSE；阶段二关闭事件流时显示“每 30 秒自动刷新”，并通过轮询及手动刷新更新数据。历史图表依赖 Prometheus，操作记录依赖 SQLite。
 
 ## 后端结构
 

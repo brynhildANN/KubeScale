@@ -4,13 +4,14 @@ package decision
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"kubescale/backend/internal/model"
 )
 
 // Validate 检查策略必填项、指标类型、目标值、副本范围和时间参数是否合法。
 func Validate(input model.PolicyInput) error {
-	if input.Name == "" || input.Namespace == "" || input.WorkloadName == "" {
+	if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Namespace) == "" || strings.TrimSpace(input.WorkloadName) == "" {
 		return fmt.Errorf("name, namespace and workloadName are required")
 	}
 	if input.Metric != "cpu_utilization" && input.Metric != "rps" {
@@ -45,8 +46,14 @@ func Desired(current int32, metricValue float64, policy model.Policy) (int32, er
 	if math.IsNaN(metricValue) || math.IsInf(metricValue, 0) || metricValue < 0 {
 		return 0, fmt.Errorf("invalid metric")
 	}
-	if policy.TargetValue <= 0 {
+	if math.IsNaN(policy.TargetValue) || math.IsInf(policy.TargetValue, 0) || policy.TargetValue <= 0 {
 		return 0, fmt.Errorf("invalid target")
+	}
+	if policy.Metric != "cpu_utilization" && policy.Metric != "rps" {
+		return 0, fmt.Errorf("unsupported policy metric")
+	}
+	if policy.MinReplicas < 1 || policy.MaxReplicas < policy.MinReplicas {
+		return 0, fmt.Errorf("invalid replica bounds")
 	}
 	var raw float64
 	if policy.Metric == "cpu_utilization" {

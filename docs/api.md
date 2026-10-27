@@ -2,11 +2,13 @@
 
 状态：**阶段一接口已实现，后续能力仍是设计草案**。基础路径 `/api/v1`，JSON 使用 camelCase，时间为 RFC 3339，查询时间参数为 UTC。列表使用 `page`（从 1 开始）、`pageSize`（默认 20，最大 100），返回 `{items,total,page,pageSize}`。具体已实现范围以[阶段一说明](phase1-implementation.md)为准。
 
-阶段一已实现：`/namespaces`、`/settings`、`/overview`、`/workloads` 及详情/Pod/操作事件、`/metrics/series`、`/policies`、`/operations`、手动 Scale；`/alerts` 返回空列表。后续阶段实现 `/nodes`、告警详情/Webhook、SSE 与完整的 Pod/Kubernetes 事件融合。当前后端仅监听本机回环地址，尚无浏览器身份验证；下方认证要求属于共享环境部署前的接口约束。
+阶段一已实现：`/namespaces`、`/settings`、`/overview`、`/workloads` 及详情/Pod/操作事件、`/metrics/series`、`/policies`、`/operations`、手动 Scale；`/alerts` 返回空列表。后续阶段实现 `/nodes`、告警详情/Webhook、SSE 与完整的 Pod/Kubernetes 事件融合。当前后端仅监听本机回环地址，尚无浏览器身份验证；下方认证要求属于共享环境部署前的接口约束，不属于阶段二交付范围。阶段二继续使用轮询与手动刷新，不实现 SSE；下方 SSE 契约保留为后续设计草案。
 
 阶段一 `/workloads/{namespace}/{name}/events` 只返回伸缩操作，`/policies/validate-metric` 返回当前采样但预览序列为空；真实模式的告警、SSE 与连接设置编辑尚未启用。集群资源预订率曲线统计整个集群，Deployment 副本曲线统计允许管理的命名空间内所有 Deployment。
 
 ## 通用约定
+
+阶段二优先验证已有策略 CRUD、参数校验、启用/暂停/恢复/删除及版本冲突处理，并完善工作负载、操作详情与核心指标查询的真实模式联调。不新增可编辑连接设置，也不要求补齐节点接口、完整 Pod 资源曲线或所有外部控制器识别能力；下方扩展契约保留为后续设计。
 
 - 成功响应直接返回资源对象或列表对象；写操作返回更新后的资源及 `operationId`（如产生操作）。
 - 错误响应：`{code,message,details?,requestId}`。建议状态码：400 参数错误、401 未认证、403 无权限、404 不存在、409 控制权/版本冲突、422 策略校验失败、503 依赖不可用。
@@ -67,7 +69,7 @@ interface Policy {
 }
 ```
 
-CPU `targetValue` 为 0～1 的比例；RPS `targetValue` 是每 Pod 的 req/s，必须大于 0。首版 API 不接收内存、延迟、自定义 PromQL 和阈值步长策略。策略校验：`1 <= minReplicas <= maxReplicas`；连续次数至少为 1；时间参数非负；同一 Deployment 最多一条启用策略。后端返回字段级校验错误供表单展示。
+CPU `targetValue` 为 0～1 的比例；RPS `targetValue` 是每 Pod 的 req/s，必须大于 0。首版 API 不接收内存、延迟、自定义 PromQL 和阈值步长策略。策略校验：`1 <= minReplicas <= maxReplicas`；连续次数至少为 1；时间参数非负；同一 Deployment 最多保存一条策略。后端返回错误码及校验说明供表单展示。
 
 ## 读取接口
 
@@ -81,7 +83,7 @@ CPU `targetValue` 为 0～1 的比例；RPS `targetValue` 是每 Pod 的 req/s�
 | `GET /workloads/{namespace}/{name}/pods` | `page,pageSize` | Pod 名称、状态、节点、CPU、内存、重启、IP、容器与时间。 |
 | `GET /workloads/{namespace}/{name}/events` | `from?,to?,page,pageSize` | Kubernetes 事件、策略变更和伸缩事件时间线。 |
 | `GET /metrics/series` | `scope=cluster|workload`、`namespace?`、`workload?`、`metricIds`、`from`、`to` | `{stepSeconds,series:[{metricId,unit,points:[{timestamp,value,quality}]}]}`。 |
-| `GET /policies`、`GET /policies/{id}` | 筛选与分页 / 路径 ID | 策略列表与详情。 |
+| `GET /policies`、`GET /policies/{id}` | `namespace?,page,pageSize` / 路径 ID | 策略列表与详情。 |
 | `GET /operations`、`GET /operations/{id}` | `namespace?,workload?,type?,status?,from?,to?,page,pageSize` | 操作列表与含判断检查项的详情。 |
 | `GET /alerts`、`GET /alerts/{id}` | `status?,severity?,namespace?,page,pageSize` | 告警列表与指标/操作关联。 |
 | `GET /settings` | 无 | 只读集群、Prometheus、Alertmanager、控制器连接状态与安全可公开配置。 |
@@ -92,18 +94,18 @@ CPU `targetValue` 为 0～1 的比例；RPS `targetValue` 是每 Pod 的 req/s�
 
 | 方法与路径 | 请求/约束 | 返回 |
 | --- | --- | --- |
-| `POST /policies` | 上述 Policy 可编辑字段；后端验证工作负载控制权。 | 201，Policy |
+| `POST /policies` | 上述 Policy 可编辑字段；后端验证目标，启用时检查 HPA 控制权。 | 201，Policy |
 | `PUT /policies/{id}` | 全量可编辑字段与 `version`，冲突返回 409。 | Policy |
-| `DELETE /policies/{id}` | 先停用后删除；有执行中操作时返回 409。 | 204 |
+| `DELETE /policies/{id}` | 先暂停或停用后删除；启用中的策略返回 409。 | 204 |
 | `PATCH /policies/{id}/status` | `{status:"enabled"|"paused"|"disabled",version}`。 | Policy |
-| `POST /policies/validate-metric` | `{namespace,workloadName,metric,targetValue}`，只对管理员开放；返回当前值、质量与 15 分钟预览。 | 验证结果 |
+| `POST /policies/validate-metric` | `{namespace,workloadName,metric,targetValue}`，阶段二在本机回环接口提供；返回当前值和质量，预览序列暂为空。 | 验证结果 |
 | `POST /workloads/{namespace}/{name}/scale` | `{replicas,reason}`；有启用策略或其他控制者时返回 409。 | 202，`{operationId}` |
 
 人工伸缩必须先通过策略状态接口暂停策略，再请求 scale；前端确认框显示当前和目标副本。后端不能只依赖前端检查。当前不设计可编辑的连接设置或告警静默接口，待后端能力确定后再扩展。
 
-## 操作详情与 SSE
+## 操作详情与 SSE（SSE 不属于阶段二范围）
 
-操作详情至少包含 `id,type,status,namespace,workloadName,source,metricId,metricValue,targetValue,oldReplicas,candidateReplicas,desiredReplicas,actualReplicas,checks:[{code,passed,reason}],errorCode,errorMessage,createdAt,finishedAt`。失败与跳过都保留 `reason`；无实际值时为 `null`。
+操作详情至少包含 `id,type,status,namespace,workloadName,source,metricId,metricValue,targetValue,oldReplicas,candidateReplicas,desiredReplicas,actualReplicas,checks:[{code,passed,reason}],errorCode,errorMessage,createdAt,finishedAt`。失败与跳过的原因保存在 `checks[].reason` 与 `errorMessage`；无实际值时为 `null`。阶段二自动决策新增可选 `policy`（决策时完整策略快照）和 `metricSampledAt`（指标有效时的采样时间）；旧记录和手动操作可缺省。策略修改或删除不影响已保存快照。`desiredReplicas` 是计划值，跳过时不表示已写入；`actualReplicas` 是写后 Scale.spec 核对值，不表示 Pod Ready。
 
 `GET /events/stream` 响应 `text/event-stream`。事件名称：`workload.updated`、`policy.updated`、`operation.created`、`operation.updated`、`alert.firing`、`alert.resolved`。示例：
 

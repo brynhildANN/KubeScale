@@ -25,14 +25,18 @@ const search = ref('')
 function submitSearch() {
   if (search.value.trim()) router.push({ path: '/workloads', query: { q: search.value.trim() } })
 }
-onMounted(async () => {
+async function loadStatus() {
   try {
     ;[namespaces.value, settings.value] = await Promise.all([api.namespaces(), api.settings()])
   } catch {
     /* status remains unknown */
   }
+}
+onMounted(() => {
+  void loadStatus()
   ui.connect()
 })
+watch(() => ui.refreshKey, loadStatus)
 onBeforeUnmount(() => ui.disconnect())
 watch(
   () => route.path,
@@ -143,13 +147,19 @@ watch(
           控制器 {{ settings?.controllerConnected ? '运行中' : '未知' }}
         </span>
         <span class="statusbar-right">
-          {{ isMock ? 'Mock 数据 · 无真实集群操作' : `事件流：${ui.liveStatus}` }}
+          {{
+            isMock
+              ? 'Mock 数据 · 无真实集群操作'
+              : ui.liveStatus === 'polling'
+                ? '每 30 秒自动刷新 · 支持手动刷新'
+                : `事件流：${ui.liveStatus}`
+          }}
           <span v-if="settings?.controllerLastHeartbeat">
             · 心跳 {{ relativeTime(settings.controllerLastHeartbeat) }}
           </span>
         </span>
       </div>
-      <main class="content"><router-view /></main>
+      <main class="content"><router-view :key="route.path" /></main>
     </div>
   </div>
 </template>
